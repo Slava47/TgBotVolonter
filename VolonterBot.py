@@ -23,7 +23,7 @@ TOKEN = os.getenv('TOKEN')  # Используйте имя переменной
 bot = telebot.TeleBot(TOKEN)
 
 # Подключение к базе данных
-conn = sqlite3.connect('/app/data/volunter_bot.db', check_same_thread=False)
+conn = sqlite3.connect('/app/data/volunteer_bot.db', check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute('''
