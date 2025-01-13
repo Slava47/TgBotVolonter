@@ -23,7 +23,8 @@ RUN pip install --no-cache-dir \
     pyTelegramBotAPI==4.3.1 \
     Pillow==9.0.0 \
     SQLAlchemy==1.4.27 \
-    openpyxl
+    openpyxl \
+    pandas
 
 # Открываем порт, если необходимо (например, для веб-сервиса)
 EXPOSE 5000
