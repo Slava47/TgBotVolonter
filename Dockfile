@@ -1,0 +1,33 @@
+# Используем официальный образ Python
+FROM python:3.9
+
+# Обновляем список пакетов и устанавливаем необходимые системные зависимости
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends tzdata && \
+    rm -rf /var/lib/apt/lists/*
+
+# Устанавливаем часовой пояс на Москву
+ENV TZ=Europe/Moscow
+
+# Создаем символическую ссылку для локального времени
+RUN ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
+# Устанавливаем рабочую директорию
+WORKDIR /app
+
+# Копируем все файлы проекта в контейнер
+COPY . .
+
+# Устанавливаем необходимые зависимости
+RUN pip install --no-cache-dir \
+    pyTelegramBotAPI==4.3.1 \
+    Pillow==9.0.0 \
+    SQLAlchemy==1.4.27 \
+    openpyxl
+
+# Открываем порт, если необходимо (например, для веб-сервиса)
+EXPOSE 5000
+VOLUME /app/data
+
+# Запускаем бота
+CMD ["python", "pipi30.py"]
