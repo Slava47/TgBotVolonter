@@ -1959,7 +1959,7 @@ def notify_subscribers(event_name):
 # Функция для удаления истекших мероприятий
 def remove_expired_events():
     # Создаем новое соединение и курсор для работы с базой данных
-    conn = sqlite3.connect('volunteer_bot.db', check_same_thread=False)
+    conn = sqlite3.connect('/app/data/volunteer_bot.db', check_same_thread=False)
     cursor = conn.cursor()
     
     while True:
