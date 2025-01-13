@@ -30,4 +30,4 @@ EXPOSE 5000
 VOLUME /app/data
 
 # Запускаем бота
-CMD ["python", "pipi30.py"]
+CMD ["python", "VolonterBot.py"]
