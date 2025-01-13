@@ -19,11 +19,11 @@ import openpyxl
 
 
 
-TOKEN = '7277176904:AAHHm2P0vDtgtB9EZn7kmgvFH5rjJchjITU'  # Замените на ваш токен
+TOKEN = os.getenv('TOKEN')  # Используйте имя переменной без префикса '$'
 bot = telebot.TeleBot(TOKEN)
 
 # Подключение к базе данных
-conn = sqlite3.connect('volunteer_bot.db', check_same_thread=False)
+conn = sqlite3.connect('/app/data/volunter_bot.db', check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute('''
