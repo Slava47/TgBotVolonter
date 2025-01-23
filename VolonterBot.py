@@ -1,4 +1,4 @@
-﻿import telebot
+import telebot
 from telebot import types
 import sqlite3
 import atexit
@@ -19,11 +19,11 @@ import openpyxl
 
 
 
-TOKEN = os.getenv('TOKEN')  # Используйте имя переменной без префикса '$'
+TOKEN = '7277176904:AAHHm2P0vDtgtB9EZn7kmgvFH5rjJchjITU'  # Замените на ваш токен
 bot = telebot.TeleBot(TOKEN)
 
 # Подключение к базе данных
-conn = sqlite3.connect('/app/data/volunteer_bot.db', check_same_thread=False)
+conn = sqlite3.connect('/app/data/volunter_bot.db', check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute('''
@@ -31,6 +31,63 @@ cursor.execute('''
         user_id INTEGER PRIMARY KEY,
         block_time DATETIME
     )
+''')
+
+conn.commit()
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS task_reports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        report_text TEXT,
+        media_file_id TEXT,
+        status TEXT DEFAULT 'на рассмотрении',  -- статус отчета: на рассмотрении, одобрен, отклонен
+        FOREIGN KEY (task_id) REFERENCES tasks(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+''')
+conn.commit()
+# Создание таблицы для заданий
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    points INTEGER DEFAULT 0,
+    end_time DATETIME,
+    max_participants INTEGER DEFAULT 0
+)
+''')
+conn.commit()
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS task_applications (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        user_id INTEGER NOT NULL,
+        full_name TEXT NOT NULL,
+        group_name TEXT NOT NULL,
+        faculty TEXT NOT NULL,
+        FOREIGN KEY (task_id) REFERENCES tasks(id),
+        FOREIGN KEY (user_id) REFERENCES users(id)
+    )
+''')
+try:
+    cursor.execute('ALTER TABLE tasks ADD COLUMN start_time DATETIME')
+    conn.commit()
+    print("Столбец 'start_time' успешно добавлен.")
+except sqlite3.Error as e:
+    print(f"Ошибка при добавлении столбца: {e}")
+conn.commit()
+# Создание таблицы для заданий
+cursor.execute('''
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    description TEXT,
+    points INTEGER DEFAULT 0,
+    end_time DATETIME,
+    max_participants INTEGER DEFAULT 0
+)
 ''')
 conn.commit()
 
@@ -78,6 +135,12 @@ try:
     print("Столбец status успешно добавлен.")
 except sqlite3.Error as e:
     print(f"Ошибка при добавлении столбца: {e}")
+try:
+    cursor.execute('ALTER TABLE applications ADD COLUMN age INTEGER;')
+    print("Столбец age успешно добавлен.")
+except sqlite3.Error as e:
+    print(f"Ошибка при добавлении столбца: {e}")
+    
 
 cursor.execute('''
 CREATE TABLE IF NOT EXISTS subscribers (
@@ -106,6 +169,15 @@ CREATE TABLE IF NOT EXISTS user_states (
     has_passed_captcha INTEGER DEFAULT 0
 )
 ''')
+try:
+    cursor.execute('ALTER TABLE user_states ADD COLUMN has_received_welcome_message INTEGER DEFAULT 0')
+    conn.commit()
+    print("Столбец has_received_welcome_message успешно добавлен.")
+except sqlite3.OperationalError as e:
+    if "duplicate column name" in str(e):
+        print("Столбец has_received_welcome_message уже существует.")
+    else:
+        print(f"Ошибка при добавлении столбца: {e}")
 
 # Новая таблица для сохраненных анкет
 cursor.execute('''
@@ -116,6 +188,16 @@ CREATE TABLE IF NOT EXISTS saved_applications (
     faculty TEXT NOT NULL
 )
 ''')
+try:
+    cursor.execute('ALTER TABLE saved_applications ADD COLUMN age INTEGER;')
+    print("Столбец age успешно добавлен в таблицу saved_applications.")
+except sqlite3.Error as e:
+    if "duplicate column name" in str(e):
+        print("Столбец age уже существует в таблице saved_applications.")
+    else:
+        print(f"Ошибка при добавлении столбца age: {e}")
+
+conn.commit()
 # Проверка существования столбца start_time в таблице events
 def add_start_time_column():
     try:
@@ -134,7 +216,7 @@ add_start_time_column()
 conn.commit()
 
 # ID администраторов
-ADMIN_IDS = [5656088749, 893172924]  # Замените на ID ваших администраторов
+ADMIN_IDS = [5656088749,893172924]  # Замените на ID ваших администраторов
 
 # Глобальные переменные и списки
 user_ids = []
@@ -174,8 +256,36 @@ def check_captcha(message, correct_text):
         
         if message.text.strip().upper() == correct_text:
             bot.send_message(message.chat.id, "Проверка пройдена!")
+            
+            # Проверяем, получил ли пользователь приветственное сообщение
+            cursor.execute('SELECT has_received_welcome_message FROM user_states WHERE user_id = ?', (user_id,))
+            result = cursor.fetchone()
+            
+            # Если запись не существует, создаем ее
+            if not result:
+                cursor.execute('INSERT INTO user_states (user_id, has_passed_captcha, has_received_welcome_message) VALUES (?, ?, ?)', 
+                              (user_id, 1, 0))
+                conn.commit()
+                result = (0,)  # Устанавливаем флаг в 0 для нового пользователя
+            
+            # Если флаг равен 0, отправляем приветственное сообщение
+            if result[0] == 0:
+                # Отправляем приветственное сообщение
+                welcome_message = (
+                    "А теперь давай познакомимся! Я - «карманный помощник» для волонтера ВГЛТУ. "
+                    "С помощью меня ты можешь узнать о актуальных мероприятиях и записаться на участие в них, "
+                    "а так же поучаствовать в розыгрыше призов и посоревноваться с другими ребятами в выполнении заданий!"
+                )
+                bot.send_message(message.chat.id, welcome_message)
+                
+                # Обновляем флаг в базе данных
+                cursor.execute('UPDATE user_states SET has_received_welcome_message = 1 WHERE user_id = ?', (user_id,))
+                conn.commit()
+            
+            # Обновляем состояние прохождения капчи
             cursor.execute('INSERT OR REPLACE INTO user_states (user_id, has_passed_captcha) VALUES (?, ?)', (user_id, 1))
             conn.commit()
+            
             del user_captchas[user_id]
             show_main_menu(message)
         else:
@@ -196,7 +306,7 @@ def check_captcha(message, correct_text):
                 conn.commit()
     
     except Exception as e:
-        print(f"Ошибка при проверке капчи: {e}")                  
+        print(f"Ошибка при проверке капчи: {e}")
 
 def send_reminders():
     while True:
@@ -237,6 +347,9 @@ def send_reminders():
 
 # Запускаем поток для отправки напоминаний
 threading.Thread(target=send_reminders, daemon=True).start()
+from datetime import datetime
+
+
 @bot.message_handler(commands=['start'])
 def start(message):
     try:
@@ -262,6 +375,17 @@ def start(message):
         result = cursor.fetchone()
         
         if result and result[0] == 1:
+            current_hour = datetime.now().hour
+            if 6 <= current_hour < 12:
+                greeting = "Доброе утро! ☀️"
+            elif 12 <= current_hour < 18:
+                greeting = "Добрый день! 😊"
+            elif 18 <= current_hour < 22:
+                greeting = "Добрый вечер! 🌙"
+            else:
+                greeting = "Доброй ночи! 🌌"
+            
+            bot.send_message(message.chat.id, f"{greeting} Рад снова тебя видеть!")
             show_main_menu(message)
         else:
             # Генерация и отправка капчи
@@ -273,7 +397,7 @@ def start(message):
                 captcha_image.save(captcha_file, format='PNG')
                 captcha_file.seek(0)
                 bot.send_photo(message.chat.id, captcha_file)
-                bot.send_message(message.chat.id, "Введите текст с капчи:")
+                bot.send_message(message.chat.id, "Привет! Для начала введи текст с картинки, чтобы мы точно знали что ты человек! 🤖")                                      
                 bot.register_next_step_handler(message, lambda msg: check_captcha(msg, captcha_text))
     
     except Exception as e:
@@ -336,240 +460,1295 @@ def check_captcha_passed(message):
 
 
 
+# Главное меню
 def show_main_menu(message):
     try:
         user_id = message.from_user.id
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         
-        # Проверка прохождения капчи
-        cursor.execute('SELECT has_passed_captcha FROM user_states WHERE user_id = ?', (user_id,))
-        result = cursor.fetchone()
+        # Основные категории меню
+        buttons = [
+            types.KeyboardButton("📅 Мероприятия"),
+            types.KeyboardButton("📋 Задания"),
+            types.KeyboardButton("👤 Профиль"),
+            types.KeyboardButton("❓ Задать вопрос")  # Новая кнопка
+        ]
         
-        if result and result[0] == 1:
-            # Если капча пройдена, показываем меню
-            markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            
-            # Добавляем кнопки для всех пользователей
-            buttons = [
-                types.KeyboardButton("🚫 Отказаться от участия"),
-                types.KeyboardButton("🟢 Список мероприятий"),
-                types.KeyboardButton("🟢 Записаться на мероприятие"),
-                types.KeyboardButton("🟢 Мои баллы"),
-                types.KeyboardButton("📝 Отправить отчет"),
-                types.KeyboardButton("✏️ Редактировать данные"),
-                types.KeyboardButton("🔗 Запросить ссылку на волонтерские часы"),
-                types.KeyboardButton("🏆 Рейтинг")
-            ]
-            
-            for button in buttons:
-                markup.add(button)
-            
-            # Добавляем кнопки для администраторов
-            if message.from_user.id in ADMIN_IDS:
-                admin_buttons = [
-                    types.KeyboardButton("🟢 Список участников"),
-                    types.KeyboardButton("🟢 Экспорт данных о мероприятии"),
-                    types.KeyboardButton("🟢 Редактировать мероприятие"),
-                    types.KeyboardButton("🟢 Отправить ссылку на получение часов"),
-                    types.KeyboardButton("🟢 Добавить мероприятие"),
-                    types.KeyboardButton("🟢 Удалить мероприятие"),
-                    types.KeyboardButton("🟢 Отправить баллы")
-                ]
-                for button in admin_buttons:
-                    markup.add(button)
-            
-            bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
-        else:
-            bot.send_message(message.chat.id, "Сначала пройдите проверку капчи.")
-            start(message)
-    
+        # Добавляем кнопку администрирования, если пользователь — администратор
+        if message.from_user.id in ADMIN_IDS:
+            buttons.append(types.KeyboardButton("⚙️ Администрирование"))
+        
+        # Добавляем кнопки в меню
+        for button in buttons:
+            markup.add(button)
+        
+        bot.send_message(message.chat.id, "Выберите категорию:", reply_markup=markup)
     except Exception as e:
         print(f"Ошибка при отображении главного меню: {e}")
 
-
-    
-
-
-@bot.message_handler(func=lambda message: message.text == "✏️ Редактировать данные")
-def edit_saved_data(message):
+# Обработка выбора категории
+@bot.message_handler(func=lambda message: message.text in ["📅 Мероприятия", "📋 Задания", "👤 Профиль", "⚙️ Администрирование", "❓ Задать вопрос"])
+def handle_category_selection(message):
     try:
-        user_id = message.from_user.id
-        cursor.execute('SELECT * FROM saved_applications WHERE user_id=?', (user_id,))
-        saved_data = cursor.fetchone()
+        if message.text == "📅 Мероприятия":
+            show_events_menu(message)
+        elif message.text == "📋 Задания":
+            show_tasks_menu(message)
+        elif message.text == "👤 Профиль":
+            show_profile_menu(message)
+        elif message.text == "⚙️ Администрирование":
+            show_admin_menu(message)
+        elif message.text == "❓ Задать вопрос":
+            ask_question(message)  # Обработка кнопки "Задать вопрос"
+    except Exception as e:
+        print(f"Ошибка при обработке выбора категории: {e}")
 
-        if saved_data:
-            show_edit_menu(message)
-        else:
-            bot.send_message(message.chat.id, "У вас нет сохранённых данных.")
-    
-    except sqlite3.Error as e:
-        print(f"Ошибка при получении сохраненных данных: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
-
-def show_edit_menu(message):
+# Подменю для мероприятий
+def show_events_menu(message):
     try:
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-
-        btn_edit_full_name = types.KeyboardButton("✏️ Изменить ФИО")
-        markup.add(btn_edit_full_name)
-
-        btn_edit_group = types.KeyboardButton("✏️ Изменить группу")
-        markup.add(btn_edit_group)
-
-        btn_edit_faculty = types.KeyboardButton("✏️ Изменить факультет")
-        markup.add(btn_edit_faculty)
-
-        btn_cancel = types.KeyboardButton("❌ Отменить")  
-        markup.add(btn_cancel)
-
-        bot.send_message(message.chat.id, "Выберите, что хотите изменить:", reply_markup=markup)
-    
+        
+        buttons = [
+            types.KeyboardButton("🟢 Список мероприятий"),
+            types.KeyboardButton("🟢 Записаться на мероприятие"),
+            types.KeyboardButton("🚫 Отказаться от участия"),
+            types.KeyboardButton("📝 Отправить отчет"),
+            types.KeyboardButton("🔙 Назад")
+        ]
+        
+        for button in buttons:
+            markup.add(button)
+        
+        bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
     except Exception as e:
-        print(f"Ошибка при отображении меню редактирования: {e}")
+        print(f"Ошибка при отображении меню мероприятий: {e}")
 
-# Обработка изменения ФИО
-@bot.message_handler(func=lambda message: message.text == "✏️ Изменить ФИО")
-def change_full_name(message):
+# Подменю для заданий
+def show_tasks_menu(message):
+    try:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        
+        buttons = [
+            types.KeyboardButton("📋 Список заданий"),
+            types.KeyboardButton("📝 Отправить отчет по заданию"),
+            types.KeyboardButton("🔙 Назад")
+        ]
+        
+        for button in buttons:
+            markup.add(button)
+        
+        bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
+    except Exception as e:
+        print(f"Ошибка при отображении меню заданий: {e}")
+
+    
+ 
+# Подменю для профиля
+def show_profile_menu(message):
     try:
         user_id = message.from_user.id
         cursor.execute('SELECT full_name FROM saved_applications WHERE user_id=?', (user_id,))
-        result = cursor.fetchone()
-
-        if result:
-            old_full_name = result[0]  
-            bot.send_message(message.chat.id, f"Ваше текущее ФИО: {old_full_name}\nВведите новое ФИО (или оставьте пустым для пропуска):")
-            bot.register_next_step_handler(message, lambda msg: update_full_name(msg, old_full_name))
+        full_name = cursor.fetchone()
+        
+        if full_name:
+            bot.send_message(message.chat.id, f"Привет, {full_name[0]}! Вот твой профиль:")
         else:
-            bot.send_message(message.chat.id, "У вас нет сохранённого ФИО.")
+            bot.send_message(message.chat.id, "Привет! Вот твой профиль:")
+        
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        buttons = [
+            types.KeyboardButton("✏️ Редактировать данные"),
+            types.KeyboardButton("🔢 Мои баллы"),
+            types.KeyboardButton("🏆 Рейтинг"),
+            types.KeyboardButton("🔗 Запросить ссылку на волонтерские часы"),
+            types.KeyboardButton("🔙 Назад")
+        ]
+        
+        for button in buttons:
+            markup.add(button)
+        
+        bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
+    except Exception as e:
+        print(f"Ошибка при отображении меню профиля: {e}")
+
+# Подменю для администрирования
+def show_admin_menu(message):
+    try:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        
+        buttons = [
+            types.KeyboardButton("🟢 Добавить задание"),
+            types.KeyboardButton("🟢 Удалить задание"),
+            types.KeyboardButton("🟢 Добавить мероприятие"),
+            types.KeyboardButton("🟢 Удалить мероприятие"),
+            types.KeyboardButton("🟢 Список участников"),
+            types.KeyboardButton("🟢 Экспорт данных о мероприятии"),
+            types.KeyboardButton("🟢 Отправить баллы"),
+            types.KeyboardButton("🟢 Рассмотреть отчеты"),
+            types.KeyboardButton("📊 Полный отчет по боту"),
+            types.KeyboardButton("🟢 Отправить ссылку на получение часов"),  # Новая кнопка
+            types.KeyboardButton("🔙 Назад")
+        ]
+        
+        for button in buttons:
+            markup.add(button)
+        
+        bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
+    except Exception as e:
+        print(f"Ошибка при отображении меню администрирования: {e}")
+
+# Обработка кнопки "🔙 Назад"
+@bot.message_handler(func=lambda message: message.text == "🔙 Назад")
+def handle_back_button(message):
+    show_main_menu(message)
+def send_question_to_admins(message):
+    try:
+        # Проверяем, что сообщение является текстовым
+        if message.content_type != 'text':
+            bot.send_message(message.chat.id, "Извините, я принимаю только текстовые сообщения. Пожалуйста, напишите ваш вопрос текстом.")
+            return
+        
+        question = message.text.strip()
+        if not question:
+            bot.send_message(message.chat.id, "Вопрос не может быть пустым. Попробуйте снова.")
+            return
+        
+        # Отправляем вопрос всем администраторам
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, f"Новый вопрос от пользователя @{message.from_user.username or message.from_user.first_name}:\n\n{question}")
+        
+        # Уведомляем пользователя
+        bot.send_message(message.chat.id, "Ваш вопрос отправлен администраторам. Спасибо!")
+    except Exception as e:
+        print(f"Ошибка при отправке вопроса: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при отправке вопроса. Попробуйте позже.")
+def ask_question(message):
+    try:
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  # Добавляем кнопку выхода
+        bot.send_message(message.chat.id, "Напишите ваш вопрос или нажмите '❌ Выйти в главное меню':", reply_markup=markup)
+        bot.register_next_step_handler(message, handle_question_input)
+    except Exception as e:
+        print(f"Ошибка при запросе вопроса: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка. Попробуйте позже.")
+
+def handle_question_input(message):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)  # Возвращаем пользователя в главное меню
+            return
+        else:
+            send_question_to_admins(message)  # Отправляем вопрос администраторам
+    except Exception as e:
+        print(f"Ошибка при обработке вопроса: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка. Попробуйте позже.")
+
+def send_question_to_admins(message):
+    try:
+        # Проверяем, что сообщение является текстовым
+        if message.content_type != 'text':
+            bot.send_message(message.chat.id, "Извините, я принимаю только текстовые сообщения. Пожалуйста, напишите ваш вопрос текстом.")
+            return
+        
+        question = message.text.strip()
+        if not question:
+            bot.send_message(message.chat.id, "Вопрос не может быть пустым. Попробуйте снова.")
+            return
+        
+        # Отправляем вопрос всем администраторам
+        for admin_id in ADMIN_IDS:
+            bot.send_message(admin_id, f"Новый вопрос от пользователя @{message.from_user.username or message.from_user.first_name}:\n\n{question}")
+        
+        # Уведомляем пользователя
+        bot.send_message(message.chat.id, "Ваш вопрос отправлен администраторам. Спасибо!")
+    except Exception as e:
+        print(f"Ошибка при отправке вопроса: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при отправке вопроса. Попробуйте позже.")
+
+def cancel_action(message):
+    bot.send_message(message.chat.id, "Вы вернулись в главное меню.")
+    show_main_menu(message)  # Возвращаем пользователя в главное меню
+
+# Отправка вопроса администраторам
+# Отправка вопроса администраторам
+@bot.message_handler(func=lambda message: message.text == "📊 Полный отчет по боту")
+def generate_full_report(message):
+    try:
+        if message.from_user.id in ADMIN_IDS:
+            # Сбор данных из всех таблиц
+            # Таблица tasks
+            cursor.execute('SELECT * FROM tasks')
+            tasks = cursor.fetchall()
+            tasks_columns = [description[0] for description in cursor.description]  # Получаем названия столбцов
+            tasks_df = pd.DataFrame(tasks, columns=tasks_columns)
+
+            # Таблица events
+            cursor.execute('SELECT * FROM events')
+            events = cursor.fetchall()
+            events_columns = [description[0] for description in cursor.description]
+            events_df = pd.DataFrame(events, columns=events_columns)
+
+            # Таблица applications
+            cursor.execute('SELECT * FROM applications')
+            applications = cursor.fetchall()
+            applications_columns = [description[0] for description in cursor.description]
+            applications_df = pd.DataFrame(applications, columns=applications_columns)
+
+            # Таблица task_applications
+            cursor.execute('SELECT * FROM task_applications')
+            task_applications = cursor.fetchall()
+            task_applications_columns = [description[0] for description in cursor.description]
+            task_applications_df = pd.DataFrame(task_applications, columns=task_applications_columns)
+
+            # Таблица task_reports
+            cursor.execute('SELECT * FROM task_reports')
+            task_reports = cursor.fetchall()
+            task_reports_columns = [description[0] for description in cursor.description]
+            task_reports_df = pd.DataFrame(task_reports, columns=task_reports_columns)
+
+            # Таблица user_points
+            cursor.execute('SELECT * FROM user_points')
+            user_points = cursor.fetchall()
+            user_points_columns = [description[0] for description in cursor.description]
+            user_points_df = pd.DataFrame(user_points, columns=user_points_columns)
+
+            # Таблица subscribers
+            cursor.execute('SELECT * FROM subscribers')
+            subscribers = cursor.fetchall()
+            subscribers_columns = [description[0] for description in cursor.description]
+            subscribers_df = pd.DataFrame(subscribers, columns=subscribers_columns)
+
+            # Таблица saved_applications
+            cursor.execute('SELECT * FROM saved_applications')
+            saved_applications = cursor.fetchall()
+            saved_applications_columns = [description[0] for description in cursor.description]
+            saved_applications_df = pd.DataFrame(saved_applications, columns=saved_applications_columns)
+
+            # Таблица blocked_users
+            cursor.execute('SELECT * FROM blocked_users')
+            blocked_users = cursor.fetchall()
+            blocked_users_columns = [description[0] for description in cursor.description]
+            blocked_users_df = pd.DataFrame(blocked_users, columns=blocked_users_columns)
+
+            # Таблица user_states
+            cursor.execute('SELECT * FROM user_states')
+            user_states = cursor.fetchall()
+            user_states_columns = [description[0] for description in cursor.description]
+            user_states_df = pd.DataFrame(user_states, columns=user_states_columns)
+
+            # Создание Excel-файла
+            with pd.ExcelWriter('full_report.xlsx') as writer:
+                tasks_df.to_excel(writer, sheet_name='Задания', index=False)
+                events_df.to_excel(writer, sheet_name='Мероприятия', index=False)
+                applications_df.to_excel(writer, sheet_name='Заявки', index=False)
+                task_applications_df.to_excel(writer, sheet_name='Заявки на задания', index=False)
+                task_reports_df.to_excel(writer, sheet_name='Отчеты по заданиям', index=False)
+                user_points_df.to_excel(writer, sheet_name='Баллы пользователей', index=False)
+                subscribers_df.to_excel(writer, sheet_name='Подписчики', index=False)
+                saved_applications_df.to_excel(writer, sheet_name='Сохраненные заявки', index=False)
+                blocked_users_df.to_excel(writer, sheet_name='Заблокированные пользователи', index=False)
+                user_states_df.to_excel(writer, sheet_name='Состояния пользователей', index=False)
+
+            # Отправка файла администратору
+            with open('full_report.xlsx', 'rb') as file:
+                bot.send_document(message.chat.id, file, caption="Полный отчет по деятельности бота")
+
+            # Удаление временного файла
+            os.remove('full_report.xlsx')
+
+        else:
+            bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
+    except Exception as e:
+        print(f"Ошибка при создании отчета: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при создании отчета.")
+
+    
+@bot.message_handler(func=lambda message: message.text == "📝 Отправить отчет по заданию")
+def prompt_send_task_report(message):
+    try:
+        # Получаем список заданий, на которые пользователь записан
+        cursor.execute('SELECT task_id FROM task_applications WHERE user_id = ?', (message.from_user.id,))
+        user_tasks = cursor.fetchall()
+
+        if user_tasks:
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for task in user_tasks:
+                cursor.execute('SELECT name FROM tasks WHERE id = ?', (task[0],))
+                task_result = cursor.fetchone()
+                
+                # Проверяем, что task_result не равен None
+                if task_result:
+                    task_name = task_result[0]
+                    markup.add(task_name)
+                else:
+                    # Если задание не найдено, пропускаем его
+                    continue
+            
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+            bot.send_message(message.chat.id, "Выберите задание для отправки отчета:", reply_markup=markup)
+            bot.register_next_step_handler(message, handle_task_report_selection)
+        else:
+            bot.send_message(message.chat.id, "Вы не записаны ни на одно задание.")
     
     except sqlite3.Error as e:
-        print(f"Ошибка при получении ФИО: {e}")
+        print(f"Ошибка при получении списка заданий: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
-
-def update_full_name(message, old_full_name):
+    
+    except Exception as e:
+        print(f"Общая ошибка при отправке отчета: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def handle_task_report_selection(message):
     try:
-        if message.text.strip() == "❌ Отменить":  # Проверка на отмену
+        if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)
             return
 
-        new_full_name = message.text.strip() or old_full_name
+        selected_task = message.text.strip()
+        cursor.execute('SELECT id FROM tasks WHERE name = ?', (selected_task,))
+        task_id_result = cursor.fetchone()
+
+        if task_id_result:
+            task_id = task_id_result[0]
+            bot.send_message(message.chat.id, "Введите текст отчета или отправьте фото/видео:")
+            bot.register_next_step_handler(message, lambda msg: save_task_report(msg, task_id))
+        else:
+            bot.send_message(message.chat.id, "Выбранное задание не найдено.")
+    
+    except sqlite3.Error as e:
+        print(f"Ошибка при обработке выбора задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при обработке данных.")
+    
+    except Exception as e:
+        print(f"Общая ошибка при обработке выбора задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def save_task_report(message, task_id):
+    try:
+        if message.text and message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
+
+        report_text = message.text if message.text else ""
+        media_file_id = None
+
+        if message.content_type in ['photo', 'video']:
+            media_file_id = message.photo[-1].file_id if message.content_type == 'photo' else message.video.file_id
+
+        user_id = message.from_user.id
+
+        # Получаем полную информацию о пользователе из таблицы saved_applications
+        cursor.execute('SELECT full_name, group_name, faculty FROM saved_applications WHERE user_id=?', (user_id,))
+        user_data = cursor.fetchone()
+
+        if user_data:
+            full_name, group_name, faculty = user_data
+        else:
+            full_name, group_name, faculty = "Неизвестно", "Неизвестно", "Неизвестно"
+
+        # Сохраняем отчет в базу данных
+        cursor.execute(
+            'INSERT INTO task_reports (task_id, user_id, report_text, media_file_id) VALUES (?, ?, ?, ?)',
+            (task_id, user_id, report_text, media_file_id)
+        )
+        conn.commit()
+
+        # Получаем название задания
+        cursor.execute('SELECT name FROM tasks WHERE id = ?', (task_id,))
+        task_name_result = cursor.fetchone()
+        task_name = task_name_result[0] if task_name_result else "Неизвестное задание"
+
+        # Формируем сообщение для администратора
+        admin_message = (
+            f"Новый отчет по заданию '{task_name}':\n"
+            f"Пользователь: @{message.from_user.username or message.from_user.first_name}\n"
+            f"ФИО: {full_name}\n"
+            f"Группа: {group_name}\n"
+            f"Факультет: {faculty}\n"
+            f"Текст отчета: {report_text}\n"
+            f"Медиафайл: {'Присутствует' if media_file_id else 'Отсутствует'}"
+        )
+
+        # Отправляем уведомление администратору
+        for admin in ADMIN_IDS:
+            bot.send_message(admin, admin_message)
+            if media_file_id:
+                if message.content_type == 'photo':
+                    bot.send_photo(admin, media_file_id, caption="Медиафайл из отчета")
+                elif message.content_type == 'video':
+                    bot.send_video(admin, media_file_id, caption="Медиафайл из отчета")
+
+        bot.send_message(message.chat.id, "Ваш отчет успешно отправлен на рассмотрение!")
+    
+    except sqlite3.Error as e:
+        print(f"Ошибка при сохранении отчета: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при сохранении данных.")
+    
+    except Exception as e:
+        print(f"Общая ошибка при сохранении отчета: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+@bot.message_handler(func=lambda message: message.text == "🟢 Рассмотреть отчеты")
+def review_reports(message):
+    try:
+        if message.from_user.id in ADMIN_IDS:
+            # Получаем отчеты, которые находятся на рассмотрении
+            cursor.execute('SELECT id, task_id, user_id, report_text, media_file_id FROM task_reports WHERE status = "на рассмотрении"')
+            reports = cursor.fetchall()
+
+            if reports:
+                markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+                for report in reports:
+                    report_id, task_id, user_id, report_text, media_file_id = report
+                    
+                    # Получаем название задания по task_id
+                    cursor.execute('SELECT name FROM tasks WHERE id = ?', (task_id,))
+                    task_result = cursor.fetchone()
+                    
+                    # Получаем информацию о пользователе из таблицы saved_applications
+                    cursor.execute('SELECT full_name FROM saved_applications WHERE user_id = ?', (user_id,))
+                    user_result = cursor.fetchone()
+                    full_name = user_result[0] if user_result else "Неизвестный пользователь"
+
+                    # Проверяем, что task_result не равен None
+                    if task_result:
+                        task_name = task_result[0]
+                        # Добавляем report_id в текст сообщения
+                        markup.add(f"Отчет по заданию: {task_name} (От: {full_name}) (ID: {report_id})")
+                    else:
+                        # Если задание не найдено, пропускаем этот отчет
+                        print(f"Задание с ID {task_id} не найдено в таблице tasks.")
+                        continue
+                
+                markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+                bot.send_message(message.chat.id, "Выберите отчет для рассмотрения:", reply_markup=markup)
+                bot.register_next_step_handler(message, handle_report_review)
+            else:
+                bot.send_message(message.chat.id, "Нет отчетов на рассмотрении.")
+        else:
+            bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
+    
+    except sqlite3.Error as e:
+        print(f"Ошибка при получении отчетов: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
+    
+    except Exception as e:
+        print(f"Общая ошибка при рассмотрении отчетов: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+
+def handle_report_review(message):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
+
+        # Извлекаем ID отчета из текста сообщения
+        report_id = int(message.text.split("(ID: ")[1].replace(")", ""))
+        
+        # Получаем данные отчета
+        cursor.execute('SELECT task_id, user_id, report_text, media_file_id FROM task_reports WHERE id = ?', (report_id,))
+        report_data = cursor.fetchone()
+
+        if report_data:
+            task_id, user_id, report_text, media_file_id = report_data
+
+            # Получаем название задания
+            cursor.execute('SELECT name FROM tasks WHERE id = ?', (task_id,))
+            task_name_result = cursor.fetchone()
+            task_name = task_name_result[0] if task_name_result else "Неизвестное задание"
+
+            # Получаем полную информацию о пользователе
+            cursor.execute('SELECT full_name, group_name, faculty FROM saved_applications WHERE user_id=?', (user_id,))
+            user_data = cursor.fetchone()
+
+            if user_data:
+                full_name, group_name, faculty = user_data
+            else:
+                full_name, group_name, faculty = "Неизвестно", "Неизвестно", "Неизвестно"
+
+            # Формируем сообщение для администратора
+            report_message = (
+                f"Отчет по заданию '{task_name}':\n"
+                f"Пользователь: @{message.from_user.username or message.from_user.first_name}\n"
+                f"ФИО: {full_name}\n"
+                f"Группа: {group_name}\n"
+                f"Факультет: {faculty}\n"
+                f"Текст отчета: {report_text}\n"
+                f"Медиафайл: {'Присутствует' if media_file_id else 'Отсутствует'}"
+            )
+
+            # Отправляем сообщение администратору
+            bot.send_message(message.chat.id, report_message)
+
+            # Если есть медиафайл, отправляем его
+            if media_file_id:
+                if message.content_type == 'photo':
+                    bot.send_photo(message.chat.id, media_file_id, caption="Медиафайл из отчета")
+                elif message.content_type == 'video':
+                    bot.send_video(message.chat.id, media_file_id, caption="Медиафайл из отчета")
+
+            # Предлагаем администратору одобрить или отклонить отчет
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            markup.add("Одобрить", "Отклонить")
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+            bot.send_message(message.chat.id, "Выберите действие:", reply_markup=markup)
+            bot.register_next_step_handler(message, lambda msg: approve_or_reject_report(msg, report_id, user_id, task_id))
+        else:
+            bot.send_message(message.chat.id, "Отчет не найден.")
+    
+    except Exception as e:
+        print(f"Ошибка при рассмотрении отчета: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def approve_or_reject_report(message, report_id, user_id, task_id):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
+
+        if message.text.strip() == "Одобрить":
+            # Получаем количество баллов за задание
+            cursor.execute('SELECT points FROM tasks WHERE id = ?', (task_id,))
+            task_points = cursor.fetchone()[0]
+
+            # Обновляем статус отчета
+            cursor.execute('UPDATE task_reports SET status = "одобрен" WHERE id = ?', (report_id,))
+            
+            # Начисляем баллы пользователю
+            cursor.execute('''
+                INSERT INTO user_points (user_id, points)
+                VALUES (?, ?)
+                ON CONFLICT(user_id) DO UPDATE SET points = points + ?
+            ''', (user_id, task_points, task_points))
+            conn.commit()
+
+            # Уведомляем пользователя
+            bot.send_message(user_id, f"Ваш отчет по заданию одобрен! Вам начислено {task_points} баллов.")
+            bot.send_message(message.chat.id, "Отчет одобрен, баллы начислены.")
+        
+        elif message.text.strip() == "Отклонить":
+            cursor.execute('UPDATE task_reports SET status = "отклонен" WHERE id = ?', (report_id,))
+            conn.commit()
+
+            bot.send_message(user_id, "Ваш отчет по заданию отклонен администратором.")
+            bot.send_message(message.chat.id, "Отчет отклонен.")
+    
+    except Exception as e:
+        print(f"Ошибка при обработке отчета: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+        
+ 
+@bot.message_handler(func=lambda message: message.text == "📋 Список заданий")
+def show_tasks(message):
+    try:
+        cursor.execute('SELECT name FROM tasks')
+        tasks = cursor.fetchall()
+
+        if tasks:
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for task in tasks:
+                markup.add(task[0])
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+            bot.send_message(message.chat.id, "Выберите задание:", reply_markup=markup)
+            bot.register_next_step_handler(message, handle_task_selection)
+        else:
+            bot.send_message(message.chat.id, "Нет доступных заданий.")
+    
+    except sqlite3.Error as e:
+        print(f"Ошибка при получении списка заданий: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
+    
+    except Exception as e:
+        print(f"Общая ошибка при показе списка заданий: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def handle_task_selection(message):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
+
+        selected_task = message.text.strip()
+        cursor.execute('SELECT id, description FROM tasks WHERE name = ?', (selected_task,))
+        task_info = cursor.fetchone()
+
+        if task_info:
+            task_id, description = task_info
+            bot.send_message(message.chat.id, f"Описание задания '{selected_task}':\n{description}")
+            
+            # Предлагаем записаться на задание
+            bot.send_message(
+                message.chat.id,
+                "Хотите записаться на это задание?",
+                reply_markup=create_yes_no_keyboard()
+            )
+            bot.register_next_step_handler(message, lambda msg: handle_task_application(msg, task_id))
+        else:
+            bot.send_message(message.chat.id, "Выбранное задание не найдено.")
+    
+    except sqlite3.Error as e:
+        print(f"Ошибка при обработке выбора задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при обработке данных.")
+     
+    except Exception as e:
+        print(f"Общая ошибка при обработке выбора задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def handle_task_application(message, task_id):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
+
+        if message.text.strip().lower() == "да":
+            user_id = message.from_user.id
+
+            # Проверяем, не записан ли пользователь уже на это задание
+            cursor.execute('SELECT id FROM task_applications WHERE task_id = ? AND user_id = ?', (task_id, user_id))
+            existing_application = cursor.fetchone()
+
+            if existing_application:
+                bot.send_message(message.chat.id, "Вы уже записаны на это задание.")
+                return
+
+            # Проверяем, есть ли сохраненные данные пользователя
+            cursor.execute('SELECT full_name, group_name, faculty FROM saved_applications WHERE user_id = ?', (user_id,))
+            saved_data = cursor.fetchone()
+
+            if saved_data:
+                full_name, group_name, faculty = saved_data
+
+                # Записываем пользователя на задание
+                cursor.execute(
+                    'INSERT INTO task_applications (task_id, user_id, full_name, group_name, faculty) VALUES (?, ?, ?, ?, ?)',
+                    (task_id, user_id, full_name, group_name, faculty)
+                )
+                conn.commit()
+
+                # Получаем название задания
+                cursor.execute('SELECT name FROM tasks WHERE id = ?', (task_id,))
+                task_name = cursor.fetchone()[0]
+
+                # Отправляем уведомление администратору
+                for admin in ADMIN_IDS:
+                    bot.send_message(
+                        admin,
+                        f"Новая запись на задание:\n"
+                        f"Пользователь: @{message.from_user.username or message.from_user.first_name}\n"
+                        f"ФИО: {full_name}\n"
+                        f"Группа: {group_name}\n"
+                        f"Факультет: {faculty}\n"
+                        f"Задание: {task_name}"
+                    )
+
+                bot.send_message(message.chat.id, f"Вы успешно записаны на задание '{task_name}'!")
+            else:
+                # Если данных нет, запрашиваем их у пользователя
+                bot.send_message(message.chat.id, "Введите ваше ФИО:")
+                bot.register_next_step_handler(message, lambda msg: ask_for_group_for_task(msg, task_id))
+        else:
+            bot.send_message(message.chat.id, "Запись на задание отменена.")
+    
+    except sqlite3.Error as e:
+        print(f"Ошибка при записи на задание: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при записи на задание.")
+    
+    except Exception as e:
+        print(f"Общая ошибка при записи на задание: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+
+def ask_for_group_for_task(message, task_id):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
+
+        full_name = message.text.strip()
         
         # Валидация ФИО (например, проверка на длину)
-        if len(new_full_name) > 80:
+        if len(full_name) > 80:
             bot.send_message(message.chat.id, "ФИО слишком длинное. Пожалуйста, сократите.")
             return
         
-        user_id = message.from_user.id
-
-        cursor.execute('UPDATE saved_applications SET full_name=? WHERE user_id=?', (new_full_name, user_id))
-        conn.commit()
-
-        bot.send_message(message.chat.id, "Ваше ФИО успешно обновлено!")
-        show_main_menu(message)
-    
-    except sqlite3.Error as e:
-        print(f"Ошибка при обновлении ФИО: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при обновлении данных.")
+        bot.send_message(message.chat.id, "Введите вашу группу:")
+        bot.register_next_step_handler(message, lambda msg: ask_for_faculty_for_task(msg, task_id, full_name))
     
     except Exception as e:
-        print(f"Общая ошибка при обновлении ФИО: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка.")
-
-
-
-@bot.message_handler(func=lambda message: message.text == "✏️ Изменить группу")
-def change_group_name(message):
-    try:
-        user_id = message.from_user.id
-        cursor.execute('SELECT group_name FROM saved_applications WHERE user_id=?', (user_id,))
-        result = cursor.fetchone()
-
-        if result:
-            old_group_name = result[0]  
-            bot.send_message(message.chat.id, f"Ваша текущая группа: {old_group_name}\nВведите новую группу (или оставьте пустым для пропуска):")
-            bot.register_next_step_handler(message, lambda msg: update_group_name(msg, old_group_name))
-        else:
-            bot.send_message(message.chat.id, "У вас нет сохранённой группы.")
-    
-    except sqlite3.Error as e:
         print(f"Ошибка при получении группы: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
-
-def update_group_name(message, old_group_name):
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def ask_for_faculty_for_task(message, task_id, full_name):
     try:
-        if message.text.strip() == "❌ Отменить":  # Проверка на отмену
+        if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)
             return
 
-        new_group_name = message.text.strip() or old_group_name
+        group_name = message.text.strip()
         
         # Валидация группы (например, проверка на длину)
-        if len(new_group_name) > 50:
+        if len(group_name) > 50:
             bot.send_message(message.chat.id, "Группа слишком длинная. Пожалуйста, сократите.")
             return
         
-        user_id = message.from_user.id
-
-        cursor.execute('UPDATE saved_applications SET group_name=? WHERE user_id=?', (new_group_name, user_id))
-        conn.commit()
-
-        bot.send_message(message.chat.id, "Ваша группа успешно обновлена!")
-        show_main_menu(message)
-    
-    except sqlite3.Error as e:
-        print(f"Ошибка при обновлении группы: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при обновлении данных.")
+        # Отправляем клавиатуру с факультетами
+        bot.send_message(
+            message.chat.id,
+            "Выберите ваш факультет:",
+            reply_markup=create_faculty_keyboard()  # Используем клавиатуру с факультетами
+        )
+        bot.register_next_step_handler(message, lambda msg: save_task_application(msg, task_id, full_name, group_name))
     
     except Exception as e:
-        print(f"Общая ошибка при обновлении группы: {e}")
+        print(f"Ошибка при получении факультета: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка.")
 
-@bot.message_handler(func=lambda message: message.text == "✏️ Изменить факультет")
-def change_faculty_name(message):
+def save_task_application(message, task_id, full_name, group_name):
     try:
-        user_id = message.from_user.id
-        cursor.execute('SELECT faculty FROM saved_applications WHERE user_id=?', (user_id,))
-        result = cursor.fetchone()
-
-        if result:
-            old_faculty = result[0]  
-            bot.send_message(message.chat.id, f"Ваш текущий факультет: {old_faculty}\nВведите новый факультет (или оставьте пустым для пропуска):")
-            bot.register_next_step_handler(message, lambda msg: update_faculty_name(msg, old_faculty))
-        else:
-            bot.send_message(message.chat.id, "У вас нет сохранённого факультета.")
-    
-    except sqlite3.Error as e:
-        print(f"Ошибка при получении факультета: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
-
-def update_faculty_name(message, old_faculty):
-    try:
-        if message.text.strip() == "❌ Отменить":  # Проверка на отмену
+        if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)
             return
 
-        new_faculty = message.text.strip() or old_faculty
+        faculty = message.text.strip()
         
         # Валидация факультета (например, проверка на длину)
-        if len(new_faculty) > 80:
+        if len(faculty) > 80:
             bot.send_message(message.chat.id, "Факультет слишком длинный. Пожалуйста, сократите.")
             return
-        
+
         user_id = message.from_user.id
 
-        cursor.execute('UPDATE saved_applications SET faculty=? WHERE user_id=?', (new_faculty, user_id))
+        # Записываем пользователя на задание
+        cursor.execute(
+            'INSERT INTO task_applications (task_id, user_id, full_name, group_name, faculty) VALUES (?, ?, ?, ?, ?)',
+            (task_id, user_id, full_name, group_name, faculty)
+        )
         conn.commit()
 
-        bot.send_message(message.chat.id, "Ваш факультет успешно обновлён!")
-        show_main_menu(message)
+        # Сохраняем данные пользователя в таблицу saved_applications
+        cursor.execute(
+            'INSERT OR REPLACE INTO saved_applications (user_id, full_name, group_name, faculty) VALUES (?, ?, ?, ?)',
+            (user_id, full_name, group_name, faculty)
+        )
+        conn.commit()
+
+        # Получаем название задания
+        cursor.execute('SELECT name FROM tasks WHERE id = ?', (task_id,))
+        task_name = cursor.fetchone()[0]
+
+        # Отправляем уведомление администратору
+        for admin in ADMIN_IDS:
+            bot.send_message(
+                admin,
+                f"Новая запись на задание:\n"
+                f"Пользователь: @{message.from_user.username or message.from_user.first_name}\n"
+                f"ФИО: {full_name}\n"
+                f"Группа: {group_name}\n"
+                f"Факультет: {faculty}\n"
+                f"Задание: {task_name}"
+            )
+
+        bot.send_message(message.chat.id, f"Вы успешно записаны на задание '{task_name}'!")
     
     except sqlite3.Error as e:
-        print(f"Ошибка при обновлении факультета: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при обновлении данных.")
+        print(f"Ошибка при сохранении заявки на задание: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при сохранении данных.")
     
     except Exception as e:
-        print(f"Общая ошибка при обновлении факультета: {e}")
+        print(f"Общая ошибка при сохранении заявки на задание: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+# Глобальный словарь для хранения данных задания
+task_data = {}
+
+@bot.message_handler(func=lambda message: message.text == "🟢 Добавить задание")
+def prompt_add_task(message):
+    if message.from_user.id in ADMIN_IDS:
+        # Инициализируем словарь для хранения данных задания
+        global task_data
+        task_data = {}  # Очищаем предыдущие данные
+        
+        # Запрашиваем название задания
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+        bot.send_message(message.chat.id, "Введите название задания:", reply_markup=markup)
+        bot.register_next_step_handler(message, save_task_name)
+    else:
+        bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
+
+def save_task_name(message):
+    if message.text == "❌ Выйти в главное меню":
+        return cancel_action(message)
+    
+    try:
+        global task_data
+        task_name = message.text.strip()
+        
+        if len(task_name) > 100:
+            bot.send_message(message.chat.id, "Название задания слишком длинное. Пожалуйста, сократите.")
+            bot.register_next_step_handler(message, save_task_name)
+            return
+        
+        task_data['name'] = task_name  # Сохраняем название задания
+        
+        # Запрашиваем описание задания
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+        bot.send_message(message.chat.id, "Введите описание задания (или оставьте пустым):", reply_markup=markup)
+        bot.register_next_step_handler(message, save_task_description)
+    
+    except Exception as e:
+        print(f"Ошибка при сохранении названия задания: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка.")
 
+def save_task_description(message):
+    if message.text == "❌ Выйти в главное меню":
+        return cancel_action(message)
+    
+    try:
+        global task_data
+        description = message.text.strip()
+        
+        if len(description) > 500:
+            bot.send_message(message.chat.id, "Описание задания слишком длинное. Пожалуйста, сократите.")
+            bot.register_next_step_handler(message, save_task_description)
+            return
+        
+        task_data['description'] = description or None  # Сохраняем описание задания
+        
+        # Запрашиваем количество баллов
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+        bot.send_message(message.chat.id, "Введите количество баллов за выполнение задания:", reply_markup=markup)
+        bot.register_next_step_handler(message, save_task_points)
+    
+    except Exception as e:
+        print(f"Ошибка при сохранении описания задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+
+def save_task_points(message):
+    if message.text == "❌ Выйти в главное меню":
+        return cancel_action(message)
+    
+    try:
+        global task_data
+        points = message.text.strip()
+        
+        if not points.isdigit() or int(points) <= 0:
+            bot.send_message(message.chat.id, "Пожалуйста, введите корректное количество баллов (целое число больше нуля).")
+            bot.register_next_step_handler(message, save_task_points)
+            return
+        
+        task_data['points'] = int(points)  # Сохраняем количество баллов
+        
+        # Запрашиваем максимальное количество участников
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+        bot.send_message(message.chat.id, "Введите максимальное количество участников (или 0 для неограниченного):", reply_markup=markup)
+        bot.register_next_step_handler(message, save_task_max_participants)
+    
+    except Exception as e:
+        print(f"Ошибка при сохранении баллов задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+
+def save_task_max_participants(message):
+    if message.text == "❌ Выйти в главное меню":
+        return cancel_action(message)
+    
+    try:
+        global task_data
+        max_participants = message.text.strip()
+        
+        if not max_participants.isdigit() or int(max_participants) < 0:
+            bot.send_message(message.chat.id, "Пожалуйста, введите корректное количество участников (целое число больше или равно нулю).")
+            bot.register_next_step_handler(message, save_task_max_participants)
+            return
+        
+        task_data['max_participants'] = int(max_participants)  # Сохраняем максимальное количество участников
+        
+        # Запрашиваем время начала задания
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+        bot.send_message(message.chat.id, "Введите время начала задания (формат: ГГГГ-ММ-ДД ЧЧ:ММ):", reply_markup=markup)
+        bot.register_next_step_handler(message, save_task_start_time)
+    
+    except Exception as e:
+        print(f"Ошибка при сохранении максимального количества участников: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+
+MAX_RETRIES = 3
+
+def save_task_start_time(message, retries=0):
+    if message.text == "❌ Выйти в главное меню":
+        return cancel_action(message)
+    
+    try:
+        global task_data
+        start_time_input = message.text.strip()
+
+        # Проверка на пустой ввод
+        if not start_time_input:
+            bot.send_message(message.chat.id, "Вы не ввели время. Пожалуйста, введите время в формате 'ГГГГ-ММ-ДД ЧЧ:ММ'.")
+            bot.register_next_step_handler(message, save_task_start_time, retries=retries)
+            return
+
+        # Проверка длины и структуры ввода
+        if len(start_time_input) != 16 or start_time_input[4] != '-' or start_time_input[7] != '-' or start_time_input[10] != ' ' or start_time_input[13] != ':':
+            bot.send_message(message.chat.id, "Неверный формат времени. Пожалуйста, введите время в формате 'ГГГГ-ММ-ДД ЧЧ:ММ'.")
+            if retries < MAX_RETRIES:
+                bot.register_next_step_handler(message, save_task_start_time, retries=retries + 1)
+            else:
+                bot.send_message(message.chat.id, "Превышено количество попыток. Возвращаюсь в главное меню.")
+                show_main_menu(message)
+            return
+
+        # Попытка преобразовать введенный текст в datetime
+        try:
+            start_time = datetime.strptime(start_time_input, '%Y-%m-%d %H:%M')
+        except ValueError:
+            bot.send_message(message.chat.id, "Неверный формат времени. Пожалуйста, введите время в формате 'ГГГГ-ММ-ДД ЧЧ:ММ'.")
+            if retries < MAX_RETRIES:
+                bot.register_next_step_handler(message, save_task_start_time, retries=retries + 1)
+            else:
+                bot.send_message(message.chat.id, "Превышено количество попыток. Возвращаюсь в главное меню.")
+                show_main_menu(message)
+            return
+
+        # Сохраняем время начала задания
+        task_data['start_time'] = start_time
+        bot.send_message(message.chat.id, "Время начала успешно сохранено.")
+
+        # Переходим к следующему шагу (например, запрос времени окончания)
+        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+        bot.send_message(message.chat.id, "Введите время окончания задания (формат: ГГГГ-ММ-ДД ЧЧ:ММ) или напишите 'нет':", reply_markup=markup)
+        bot.register_next_step_handler(message, save_task_end_time)
+
+    except Exception as e:
+        print(f"Ошибка при сохранении времени начала: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка. Пожалуйста, попробуйте снова.")
+        show_main_menu(message)
+
+def save_task_end_time(message, retries=0):
+    if message.text == "❌ Выйти в главное меню":
+        return cancel_action(message)
+    
+    try:
+        global task_data
+        end_time_input = message.text.strip()
+
+        # Если пользователь ввел "нет"
+        if end_time_input.lower() == 'нет':
+            task_data['end_time'] = None
+            bot.send_message(message.chat.id, "Время окончания не указано.")
+            save_task_to_db(message)
+            return
+
+        # Проверка длины и структуры ввода
+        if len(end_time_input) != 16 or end_time_input[4] != '-' or end_time_input[7] != '-' or end_time_input[10] != ' ' or end_time_input[13] != ':':
+            bot.send_message(message.chat.id, "Неверный формат времени. Пожалуйста, введите время в формате 'ГГГГ-ММ-ДД ЧЧ:ММ' или напишите 'нет'.")
+            if retries < MAX_RETRIES:
+                bot.register_next_step_handler(message, save_task_end_time, retries=retries + 1)
+            else:
+                bot.send_message(message.chat.id, "Превышено количество попыток. Возвращаюсь в главное меню.")
+                show_main_menu(message)
+            return
+
+        # Попытка преобразовать введенный текст в datetime
+        try:
+            end_time = datetime.strptime(end_time_input, '%Y-%m-%d %H:%M')
+        except ValueError:
+            bot.send_message(message.chat.id, "Неверный формат времени. Пожалуйста, введите время в формате 'ГГГГ-ММ-ДД ЧЧ:ММ' или напишите 'нет'.")
+            if retries < MAX_RETRIES:
+                bot.register_next_step_handler(message, save_task_end_time, retries=retries + 1)
+            else:
+                bot.send_message(message.chat.id, "Превышено количество попыток. Возвращаюсь в главное меню.")
+                show_main_menu(message)
+            return
+
+        # Сохраняем время окончания задания
+        task_data['end_time'] = end_time
+        bot.send_message(message.chat.id, "Время окончания успешно сохранено.")
+        save_task_to_db(message)
+
+    except Exception as e:
+        print(f"Ошибка при сохранении времени окончания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка. Пожалуйста, попробуйте снова.")
+        show_main_menu(message)
+
+def save_task_to_db(message):
+    try:
+        global task_data
+
+        # Проверяем обязательные поля
+        required_fields = ['name', 'points', 'start_time']
+        missing_fields = [field for field in required_fields if field not in task_data]
+
+        if missing_fields:
+            bot.send_message(message.chat.id, f"Пожалуйста, заполните следующие обязательные поля: {', '.join(missing_fields)}.")
+            prompt_add_task(message)  # Возвращаем пользователя в меню ввода данных
+            return
+
+        # Сохраняем задание в базу данных
+        cursor.execute('''
+            INSERT INTO tasks (name, description, points, max_participants, start_time, end_time)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            task_data['name'],
+            task_data.get('description'),
+            task_data['points'],
+            task_data.get('max_participants', 0),
+            task_data['start_time'].strftime('%Y-%m-%d %H:%M'),
+            task_data.get('end_time').strftime('%Y-%m-%d %H:%M') if task_data.get('end_time') else None
+        ))
+        conn.commit()
+
+        bot.send_message(message.chat.id, f"Задание '{task_data['name']}' успешно добавлено!")
+        task_data.clear()  # Очищаем данные задания
+        show_main_menu(message)  # Возвращаем пользователя в главное меню
+    
+    except sqlite3.Error as e:
+        print(f"Ошибка при сохранении задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при сохранении данных.")
+        show_main_menu(message)
+    
+    except Exception as e:
+        print(f"Общая ошибка при сохранении задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+        show_main_menu(message)
+def remove_expired_tasks():
+    conn = sqlite3.connect('/app/data/volunter_bot.db', check_same_thread=False)
+    cursor = conn.cursor()
+    while True:
+        try:
+            current_time = datetime.now()
+            cursor.execute('SELECT id FROM tasks WHERE end_time IS NOT NULL AND end_time < ?', (current_time,))
+            expired_tasks = cursor.fetchall()
+            for task in expired_tasks:
+                task_id = task[0]
+                cursor.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+                print(f"Задание с ID {task_id} было удалено.")
+            conn.commit()
+        except sqlite3.Error as e:
+            print(f"Ошибка при удалении истекших заданий: {e}")
+        except Exception as e:
+            print(f"Общая ошибка при удалении заданий: {e}")
+        time.sleep(60)  # Проверяем каждую минуту
+    conn.close()()
+threading.Thread(target=remove_expired_tasks, daemon=True).start()  
+@bot.message_handler(func=lambda message: message.text == "🟢 Удалить задание")
+def prompt_delete_task(message):
+    """
+    Функция для отображения списка заданий и запроса выбора задания для удаления.
+    """
+    if message.from_user.id in ADMIN_IDS:
+        # Получаем список всех заданий
+        cursor.execute('SELECT name FROM tasks')
+        tasks = cursor.fetchall()
+        
+        if tasks:
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for task in tasks:
+                markup.add(task[0])  # Добавляем название задания в клавиатуру
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  # Кнопка отмены
+            bot.send_message(message.chat.id, "Выберите задание для удаления:", reply_markup=markup)
+            bot.register_next_step_handler(message, handle_task_deletion)
+        else:
+            bot.send_message(message.chat.id, "Нет заданий для удаления.")
+    else:
+        bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
+
+
+def handle_task_deletion(message):
+    """
+    Функция для обработки выбора задания и запроса подтверждения удаления.
+    """
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
+        
+        selected_task = message.text.strip()
+        
+        # Проверяем, существует ли задание с таким названием
+        cursor.execute('SELECT id FROM tasks WHERE name = ?', (selected_task,))
+        task_id_result = cursor.fetchone()
+        
+        if task_id_result:
+            task_id = task_id_result[0]
+            
+            # Запрашиваем подтверждение удаления
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            markup.add(types.KeyboardButton("Да"), types.KeyboardButton("Нет"))
+            bot.send_message(message.chat.id, f"Вы уверены, что хотите удалить задание '{selected_task}'? (Да/Нет)", reply_markup=markup)
+            
+            # Передаем task_id и selected_task в следующую функцию
+            bot.register_next_step_handler(message, lambda msg: confirm_task_deletion(msg, task_id, selected_task))
+        else:
+            bot.send_message(message.chat.id, "Выбранное задание не найдено.")
+    except sqlite3.Error as e:
+        print(f"Ошибка при удалении задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при удалении задания.")
+    except Exception as e:
+        print(f"Общая ошибка при удалении задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+
+
+def confirm_task_deletion(message, task_id, task_name):
+    """
+    Функция для подтверждения удаления задания и выполнения каскадного удаления.
+    """
+    try:
+        if message.text.strip().lower() == "да":
+            # Удаляем связанные данные из таблиц task_applications и task_reports
+            cursor.execute('DELETE FROM task_applications WHERE task_id = ?', (task_id,))
+            cursor.execute('DELETE FROM task_reports WHERE task_id = ?', (task_id,))
+            
+            # Удаляем само задание из таблицы tasks
+            cursor.execute('DELETE FROM tasks WHERE id = ?', (task_id,))
+            conn.commit()
+            
+            # Уведомляем администратора об успешном удалении
+            bot.send_message(message.chat.id, f"Задание '{task_name}' и все связанные данные успешно удалены.")
+        else:
+            bot.send_message(message.chat.id, "Удаление отменено.")
+        
+        # Возвращаем администратора в главное меню
+        show_main_menu(message)
+    except sqlite3.Error as e:
+        print(f"Ошибка при удалении задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при удалении задания.")
+    except Exception as e:
+        print(f"Общая ошибка при удалении задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+# ========== МЕНЮ РЕДАКТИРОВАНИЯ ==========
+@bot.message_handler(func=lambda message: message.text == "✏️ Редактировать данные")
+def show_edit_menu(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(types.KeyboardButton("✏️ Изменить ФИО"))
+    markup.add(types.KeyboardButton("✏️ Изменить группу"))
+    markup.add(types.KeyboardButton("✏️ Изменить факультет"))
+    markup.add(types.KeyboardButton("✏️ Изменить возраст"))
+    markup.add(types.KeyboardButton("🔙 Назад"))
+    bot.send_message(message.chat.id, "✏️ Выберите поле для редактирования:", reply_markup=markup)
+
+# ========== РЕДАКТИРОВАНИЕ ФИО ==========
+@bot.message_handler(func=lambda message: message.text == "✏️ Изменить ФИО")
+def edit_full_name(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(types.KeyboardButton("🔙 Назад"))
+    msg = bot.send_message(message.chat.id, "✍️ Введите новое ФИО:", reply_markup=markup)
+    bot.register_next_step_handler(msg, process_full_name)
+
+def process_full_name(message):
+    if message.text == "🔙 Назад":
+        return show_edit_menu(message)
+    
+    try:
+        cursor.execute('UPDATE saved_applications SET full_name=? WHERE user_id=?', 
+                      (message.text, message.from_user.id))
+        conn.commit()
+        bot.send_message(message.chat.id, "✅ ФИО успешно обновлено!")
+    except Exception as e:
+        bot.send_message(message.chat.id, "❌ Ошибка при сохранении!")
+    
+    show_edit_menu(message)
+
+# ========== РЕДАКТИРОВАНИЕ ГРУППЫ ==========
+@bot.message_handler(func=lambda message: message.text == "✏️ Изменить группу")
+def edit_group(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(types.KeyboardButton("🔙 Назад"))
+    msg = bot.send_message(message.chat.id, "🏫 Введите новую группу:", reply_markup=markup)
+    bot.register_next_step_handler(msg, process_group)
+
+def process_group(message):
+    if message.text == "🔙 Назад":
+        return show_edit_menu(message)
+    
+    try:
+        cursor.execute('UPDATE saved_applications SET group_name=? WHERE user_id=?', 
+                      (message.text, message.from_user.id))
+        conn.commit()
+        bot.send_message(message.chat.id, "✅ Группа успешно обновлена!")
+    except Exception as e:
+        bot.send_message(message.chat.id, "❌ Ошибка при сохранении!")
+    
+    show_edit_menu(message)
+
+# ========== РЕДАКТИРОВАНИЕ ФАКУЛЬТЕТА ==========
+@bot.message_handler(func=lambda message: message.text == "✏️ Изменить факультет")
+def edit_faculty(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
+    faculties = [
+        "Лесной",
+        "Лесопромышленный",
+        "Экономический",
+        "Факультет компьютерных наук и технологий (ФКНиТ)",
+        "Машиностроительный",
+        "Автомобильный"
+    ]
+    markup.add(*[types.KeyboardButton(f) for f in faculties])
+    markup.add(types.KeyboardButton("🔙 Назад"))
+    msg = bot.send_message(message.chat.id, "🏛 Выберите факультет:", reply_markup=markup)
+    bot.register_next_step_handler(msg, process_faculty)
+
+def process_faculty(message):
+    if message.text == "🔙 Назад":
+        return show_edit_menu(message)
+    
+    valid_faculties = [
+        "Лесной",
+        "Лесопромышленный",
+        "Экономический",
+        "Факультет компьютерных наук и технологий (ФКНиТ)",
+        "Машиностроительный",
+        "Автомобильный"
+    ]
+    
+    if message.text not in valid_faculties:
+        bot.send_message(message.chat.id, "⚠️ Выберите факультет из списка!")
+        return edit_faculty(message)
+    
+    try:
+        cursor.execute('UPDATE saved_applications SET faculty=? WHERE user_id=?', 
+                      (message.text, message.from_user.id))
+        conn.commit()
+        bot.send_message(message.chat.id, f"✅ Факультет обновлен: {message.text}")
+    except Exception as e:
+        bot.send_message(message.chat.id, "❌ Ошибка при сохранении!")
+    
+    show_edit_menu(message)
+
+# ========== РЕДАКТИРОВАНИЕ ВОЗРАСТА ==========
+@bot.message_handler(func=lambda message: message.text == "✏️ Изменить возраст")
+def edit_age(message):
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+    markup.add(types.KeyboardButton("🔙 Назад"))
+    msg = bot.send_message(message.chat.id, "🎂 Введите ваш возраст:", reply_markup=markup)
+    bot.register_next_step_handler(msg, process_age)
+
+def process_age(message):
+    if message.text == "🔙 Назад":
+        return show_edit_menu(message)
+    
+    try:
+        age = int(message.text)
+        cursor.execute('UPDATE saved_applications SET age=? WHERE user_id=?', 
+                      (age, message.from_user.id))
+        conn.commit()
+        bot.send_message(message.chat.id, "✅ Возраст успешно обновлен!")
+    except ValueError:
+        bot.send_message(message.chat.id, "⚠️ Пожалуйста, введите число!")
+        edit_age(message)
+    except Exception as e:
+        bot.send_message(message.chat.id, "❌ Ошибка при сохранении!")
+    
+    show_edit_menu(message)
+
+# ========== ОБРАБОТКА НАВИГАЦИИ ==========
+@bot.message_handler(func=lambda message: message.text == "🔙 Назад")
+def handle_back(message):
+    try:
+        # Определяем текущий контекст
+        if message.text == "🔙 Назад":
+            if message.reply_to_message and "редактирования" in message.reply_to_message.text:
+                show_edit_menu(message)
+            else:
+                show_profile_menu(message)
+    except:
+        show_main_menu(message)
 
 
 # Обработка команды "Показать мероприятия"
@@ -618,37 +1797,73 @@ def handle_event_selection(call):
 
 
 @bot.message_handler(func=lambda message: message.text == "🟢 Список участников")
-def show_participants(message):
+def show_participants_menu(message):
     try:
         if message.from_user.id in ADMIN_IDS:
-            cursor.execute('SELECT name FROM events')
-            events = cursor.fetchall()
+            markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+            markup.add(types.KeyboardButton("📅 Участники мероприятий"))
+            markup.add(types.KeyboardButton("📋 Участники заданий"))
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
             
-            if events:
-                # Создаем клавиатуру с кнопками мероприятий и кнопкой отмены
-                markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
-                for event in events:
-                    markup.add(event[0])  
-                markup.add(types.KeyboardButton("❌ Отменить"))  
-                
-                bot.send_message(message.chat.id, "Выберите мероприятие для просмотра участников:", reply_markup=markup)
-                bot.register_next_step_handler(message, select_event)
-            else:
-                bot.send_message(message.chat.id, "Нет мероприятий.")
+            bot.send_message(message.chat.id, "Выберите тип списка участников:", reply_markup=markup)
         else:
             bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
     
-    except sqlite3.Error as e:
-        print(f"Ошибка при получении списка мероприятий: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
+    except Exception as e:
+        print(f"Ошибка при отображении меню участников: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+@bot.message_handler(func=lambda message: message.text in ["📅 Участники мероприятий", "📋 Участники заданий"])
+def handle_participants_selection(message):
+    try:
+        if message.text == "📅 Участники мероприятий":
+            show_events_for_participants(message)
+        elif message.text == "📋 Участники заданий":
+            show_tasks_for_participants(message)
     
     except Exception as e:
-        print(f"Общая ошибка при показе списка участников: {e}")
+        print(f"Ошибка при обработке выбора списка участников: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка.")
-
-def select_event(message):
+def show_events_for_participants(message):
     try:
-        if message.text.strip() == "❌ Отменить":
+        cursor.execute('SELECT name FROM events')
+        events = cursor.fetchall()
+        
+        if events:
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for event in events:
+                markup.add(event[0])
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+            
+            bot.send_message(message.chat.id, "Выберите мероприятие для просмотра участников:", reply_markup=markup)
+            bot.register_next_step_handler(message, select_event_for_participants)
+        else:
+            bot.send_message(message.chat.id, "Нет мероприятий.")
+    
+    except Exception as e:
+        print(f"Ошибка при получении списка мероприятий: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def show_tasks_for_participants(message):
+    try:
+        cursor.execute('SELECT name FROM tasks')
+        tasks = cursor.fetchall()
+        
+        if tasks:
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for task in tasks:
+                markup.add(task[0])
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+            
+            bot.send_message(message.chat.id, "Выберите задание для просмотра участников:", reply_markup=markup)
+            bot.register_next_step_handler(message, select_task_for_participants)
+        else:
+            bot.send_message(message.chat.id, "Нет заданий.")
+    
+    except Exception as e:
+        print(f"Ошибка при получении списка заданий: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def select_event_for_participants(message):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)
             return
 
@@ -661,9 +1876,9 @@ def select_event(message):
 
             # Получаем участников с подтвержденными заявками
             cursor.execute('''
-                SELECT full_name, group_name, faculty 
+                SELECT full_name, group_name, faculty, user_id 
                 FROM applications 
-                WHERE event_id = ? AND status = 'подтверждена'
+                WHERE event_id = ? AND status = "подтверждена"
             ''', (event_id,))
             
             participants = cursor.fetchall()
@@ -671,7 +1886,17 @@ def select_event(message):
             if participants:
                 participants_message = f"Участники мероприятия '{selected_event}':\n\n"
                 for participant in participants:
-                    participants_message += f"{participant[0]} - {participant[1]} ({participant[2]})\n"
+                    full_name, group_name, faculty, user_id = participant
+                    
+                    # Получаем username пользователя из Telegram
+                    try:
+                        chat = bot.get_chat(user_id)
+                        username = f"@{chat.username}" if chat.username else "Нет username"
+                    except Exception as e:
+                        print(f"Ошибка при получении username: {e}")
+                        username = "Нет username"
+                    
+                    participants_message += f"{full_name} - {group_name} ({faculty}) - {username}\n"
                 
                 bot.send_message(message.chat.id, participants_message)
             else:
@@ -679,17 +1904,120 @@ def select_event(message):
         else:
             bot.send_message(message.chat.id, "Выбранное мероприятие не найдено.")
     
-    except sqlite3.Error as e:
-        print(f"Ошибка при получении участников: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
+    except Exception as e:
+        print(f"Ошибка при показе участников мероприятия: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def show_tasks_for_participants(message):
+    try:
+        cursor.execute('SELECT name FROM tasks')
+        tasks = cursor.fetchall()
+        
+        if tasks:
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for task in tasks:
+                markup.add(task[0])
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
+            
+            bot.send_message(message.chat.id, "Выберите задание для просмотра участников:", reply_markup=markup)
+            bot.register_next_step_handler(message, select_task_for_participants)
+        else:
+            bot.send_message(message.chat.id, "Нет заданий.")
     
     except Exception as e:
-        print(f"Общая ошибка при показе участников: {e}")
+        print(f"Ошибка при получении списка заданий: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка.")
+def select_event_for_participants(message):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
 
+        selected_event = message.text.strip()
+        cursor.execute('SELECT id FROM events WHERE name = ?', (selected_event,))
+        event_id_result = cursor.fetchone()
 
+        if event_id_result:
+            event_id = event_id_result[0]
 
+            # Получаем участников с подтвержденными заявками
+            cursor.execute('''
+                SELECT full_name, group_name, faculty, user_id 
+                FROM applications 
+                WHERE event_id = ? AND status = "подтверждена"
+            ''', (event_id,))
+            
+            participants = cursor.fetchall()
+            
+            if participants:
+                participants_message = f"Участники мероприятия '{selected_event}':\n\n"
+                for participant in participants:
+                    full_name, group_name, faculty, user_id = participant
+                    
+                    # Получаем username пользователя из Telegram
+                    try:
+                        chat = bot.get_chat(user_id)
+                        username = f"@{chat.username}" if chat.username else "Нет username"
+                    except Exception as e:
+                        print(f"Ошибка при получении username: {e}")
+                        username = "Нет username"
+                    
+                    participants_message += f"{full_name} - {group_name} ({faculty}) - {username}\n"
+                
+                bot.send_message(message.chat.id, participants_message)
+            else:
+                bot.send_message(message.chat.id, "Нет участников для этого мероприятия.")
+        else:
+            bot.send_message(message.chat.id, "Выбранное мероприятие не найдено.")
+    
+    except Exception as e:
+        print(f"Ошибка при показе участников мероприятия: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
+def select_task_for_participants(message):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
 
+        selected_task = message.text.strip()
+        cursor.execute('SELECT id FROM tasks WHERE name = ?', (selected_task,))
+        task_id_result = cursor.fetchone()
+
+        if task_id_result:
+            task_id = task_id_result[0]
+
+            # Получаем участников задания
+            cursor.execute('''
+                SELECT full_name, group_name, faculty, user_id 
+                FROM task_applications 
+                WHERE task_id = ?
+            ''', (task_id,))
+            
+            participants = cursor.fetchall()
+            
+            if participants:
+                participants_message = f"Участники задания '{selected_task}':\n\n"
+                for participant in participants:
+                    full_name, group_name, faculty, user_id = participant
+                    
+                    # Получаем username пользователя из Telegram
+                    try:
+                        chat = bot.get_chat(user_id)
+                        username = f"@{chat.username}" if chat.username else "Нет username"
+                    except Exception as e:
+                        print(f"Ошибка при получении username: {e}")
+                        username = "Нет username"
+                    
+                    participants_message += f"{full_name} - {group_name} ({faculty}) - {username}\n"
+                
+                bot.send_message(message.chat.id, participants_message)
+            else:
+                bot.send_message(message.chat.id, "Нет участников для этого задания.")
+        else:
+            bot.send_message(message.chat.id, "Выбранное задание не найдено.")
+    
+    except Exception as e:
+        print(f"Ошибка при показе участников задания: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
 # Обработчик выбора мероприятия
 @bot.callback_query_handler(func=lambda call: True)
 def handle_event_selection(call):
@@ -712,6 +2040,40 @@ def handle_event_selection(call):
         print(f"Общая ошибка при показе информации о мероприятии: {e}")
         bot.send_message(call.message.chat.id, "Произошла ошибка.")
 
+from telebot import types
+
+# Функция для создания клавиатуры с кнопками "Да" и "Нет"
+def create_yes_no_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    btn_yes = types.KeyboardButton("Да")
+    btn_no = types.KeyboardButton("Нет")
+    markup.add(btn_yes, btn_no)
+    return markup
+
+from telebot import types
+
+# Функция для создания клавиатуры с факультетами
+def create_faculty_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    btn_forest = types.KeyboardButton("Лесной")
+    btn_forest_industry = types.KeyboardButton("Лесопромышленный")
+    btn_economics = types.KeyboardButton("Экономический")
+    btn_computer_science = types.KeyboardButton("Факультет компьютерных наук и технологий (ФКНиТ)")
+    btn_mechanical = types.KeyboardButton("Машиностроительный")
+    btn_automotive = types.KeyboardButton("Автомобильный")
+    btn_cancel = types.KeyboardButton("❌ Выйти в главное меню")
+    markup.add(btn_forest, btn_forest_industry, btn_economics, btn_computer_science, btn_mechanical, btn_automotive, btn_cancel)
+    return markup
+
+# Функция для создания клавиатуры с кнопками "Да", "Нет" и "❌ Выйти в главное меню"
+def create_yes_no_keyboard():
+    markup = types.ReplyKeyboardMarkup(resize_keyboard=True, one_time_keyboard=True)
+    btn_yes = types.KeyboardButton("Да")
+    btn_no = types.KeyboardButton("Нет")
+    btn_cancel = types.KeyboardButton("❌ Выйти в главное меню")
+    markup.add(btn_yes, btn_no, btn_cancel)
+    return markup
+
 @bot.message_handler(func=lambda message: message.text == "🟢 Записаться на мероприятие")
 def get_event_for_application(message):
     try:
@@ -722,7 +2084,7 @@ def get_event_for_application(message):
             markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
             for event in events:
                 markup.add(event[0])
-            markup.add(types.KeyboardButton("❌ Отменить"))  
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
             bot.send_message(message.chat.id, "Выберите мероприятие для записи:", reply_markup=markup)
             bot.register_next_step_handler(message, handle_event_selection_for_application)
         else:
@@ -738,7 +2100,7 @@ def get_event_for_application(message):
 
 def handle_event_selection_for_application(message):
     try:
-        if message.text.strip() == "❌ Отменить":  
+        if message.text.strip() == "❌ Выйти в главное меню":  
             cancel_action(message)
             return
 
@@ -769,8 +2131,18 @@ def handle_event_selection_for_application(message):
                 saved_data = cursor.fetchone()
 
                 if saved_data:
-                    bot.send_message(message.chat.id, "Нужно ли вам освобождение? (да/нет)")
-                    bot.register_next_step_handler(message, lambda msg: ask_for_volunteer_hours(msg, saved_data[1], saved_data[2], saved_data[3], event_id))
+                    # Если возраст уже сохранен, пропускаем запрос возраста
+                    if saved_data[4]:  # Проверяем, есть ли возраст в сохраненных данных
+                        bot.send_message(
+                            message.chat.id,
+                            "Нужно ли вам освобождение?",
+                            reply_markup=create_yes_no_keyboard()
+                        )
+                        bot.register_next_step_handler(message, lambda msg: ask_for_volunteer_hours(msg, saved_data[1], saved_data[2], saved_data[3], event_id, saved_data[4]))
+                    else:
+                        # Если возраст не сохранен, запрашиваем его
+                        bot.send_message(message.chat.id, "Введите ваш возраст:")
+                        bot.register_next_step_handler(message, lambda msg: save_age_and_continue(msg, saved_data[1], saved_data[2], saved_data[3], event_id))
                 else:
                     bot.send_message(message.chat.id, "Введите ваше ФИО:")
                     bot.register_next_step_handler(message, lambda msg: ask_for_group(msg, event_id))
@@ -785,10 +2157,35 @@ def handle_event_selection_for_application(message):
         print(f"Общая ошибка при обработке выбора мероприятия: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка.")
 
+def save_age_and_continue(message, full_name, group_name, faculty, event_id):
+    try:
+        if message.text.strip() == "❌ Выйти в главное меню":  
+            cancel_action(message)
+            return
+
+        age = int(message.text.strip())
+        
+        # Сохраняем возраст в таблице saved_applications
+        cursor.execute('UPDATE saved_applications SET age=? WHERE user_id=?', (age, message.from_user.id))
+        conn.commit()
+
+        bot.send_message(
+            message.chat.id,
+            "Нужно ли вам освобождение?",
+            reply_markup=create_yes_no_keyboard()
+        )
+        bot.register_next_step_handler(message, lambda msg: ask_for_volunteer_hours(msg, full_name, group_name, faculty, event_id, age))
+    
+    except ValueError:
+        bot.send_message(message.chat.id, "Пожалуйста, введите корректный возраст (число).")
+        bot.register_next_step_handler(message, lambda msg: save_age_and_continue(msg, full_name, group_name, faculty, event_id))
+    except Exception as e:
+        print(f"Ошибка при сохранении возраста: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка.")
 
 def ask_for_group(message, event_id):
     try:
-        if message.text.strip() == "❌ Отменить":  
+        if message.text.strip() == "❌ Выйти в главное меню":  
             cancel_action(message)
             return
 
@@ -808,7 +2205,7 @@ def ask_for_group(message, event_id):
 
 def ask_for_faculty(message, full_name, event_id):
     try:
-        if message.text.strip() == "❌ Отменить":  
+        if message.text.strip() == "❌ Выйти в главное меню":  
             cancel_action(message)
             return
 
@@ -819,51 +2216,108 @@ def ask_for_faculty(message, full_name, event_id):
             bot.send_message(message.chat.id, "Группа слишком длинная. Пожалуйста, сократите.")
             return
         
-        bot.send_message(message.chat.id, "Введите ваш факультет:")
-        bot.register_next_step_handler(message, lambda msg: ask_for_release(msg, full_name, group_name, event_id))
+        # Отправляем клавиатуру с факультетами
+        bot.send_message(
+            message.chat.id,
+            "Выберите ваш факультет:",
+            reply_markup=create_faculty_keyboard()
+        )
+        bot.register_next_step_handler(message, lambda msg: handle_faculty_selection(msg, full_name, group_name, event_id))
     
     except Exception as e:
         print(f"Ошибка при получении факультета: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка.")
 
-def ask_for_release(message, full_name, group_name, event_id):
+def handle_faculty_selection(message, full_name, group_name, event_id):
     try:
-        if message.text.strip() == "❌ Отменить":  
+        if message.text.strip() == "❌ Выйти в главное меню":  
             cancel_action(message)
             return
 
         faculty = message.text.strip()
         
-        # Валидация факультета (например, проверка на длину)
-        if len(faculty) > 80:
-            bot.send_message(message.chat.id, "Факультет слишком длинный. Пожалуйста, сократите.")
+        # Проверяем, что выбранный факультет есть в списке
+        valid_faculties = [
+            "Лесной",
+            "Лесопромышленный",
+            "Экономический",
+            "Факультет компьютерных наук и технологий (ФКНиТ)",
+            "Машиностроительный",
+            "Автомобильный"
+        ]
+        
+        if faculty not in valid_faculties:
+            bot.send_message(
+                message.chat.id,
+                "Пожалуйста, выберите факультет из списка.",
+                reply_markup=create_faculty_keyboard()
+            )
+            bot.register_next_step_handler(message, lambda msg: handle_faculty_selection(msg, full_name, group_name, event_id))
             return
         
-        bot.send_message(message.chat.id, "Нужно ли вам освобождение? (да/нет)")
-        bot.register_next_step_handler(message, lambda msg: ask_for_volunteer_hours(msg, full_name, group_name, faculty, event_id))
+        # Если факультет выбран корректно, переходим к следующему шагу
+        bot.send_message(message.chat.id, "Введите ваш возраст:")
+        bot.register_next_step_handler(message, lambda msg: save_age_and_continue(msg, full_name, group_name, faculty, event_id))
     
     except Exception as e:
-        print(f"Ошибка при получении информации об освобождении: {e}")
+        print(f"Ошибка при выборе факультета: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка.")
 
-def ask_for_volunteer_hours(message, full_name, group_name, faculty, event_id):
+def ask_for_volunteer_hours(message, full_name, group_name, faculty, event_id, age):
     try:
-        if message.text.strip() == "❌ Отменить":  
+        if message.text.strip() == "❌ Выйти в главное меню":  
             cancel_action(message)
             return
 
-        needs_release = 1 if message.text.lower() == 'да' else 0
-        bot.send_message(message.chat.id, "Нужны ли вам волонтёрские часы? (да/нет)")
-        bot.register_next_step_handler(message, lambda msg: submit_application(msg, full_name, group_name, faculty, event_id, needs_release))
+        # Проверяем, какой ответ выбрал пользователь
+        if message.text.strip().lower() == "да":
+            needs_release = 1
+        elif message.text.strip().lower() == "нет":
+            needs_release = 0
+        else:
+            # Если пользователь ввел что-то другое, просим повторить
+            bot.send_message(
+                message.chat.id,
+                "Пожалуйста, выберите 'Да' или 'Нет'.",
+                reply_markup=create_yes_no_keyboard()
+            )
+            bot.register_next_step_handler(message, lambda msg: ask_for_volunteer_hours(msg, full_name, group_name, faculty, event_id, age))
+            return
+
+        # Задаем следующий вопрос с кнопками "Да", "Нет" и "❌ Выйти в главное меню"
+        bot.send_message(
+            message.chat.id,
+            "Нужны ли вам волонтёрские часы?",
+            reply_markup=create_yes_no_keyboard()
+        )
+        bot.register_next_step_handler(message, lambda msg: submit_application(msg, full_name, group_name, faculty, event_id, needs_release, age))
     
     except Exception as e:
         print(f"Ошибка при получении информации о волонтёрских часах: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка.")
 
-def submit_application(message, full_name, group_name, faculty, event_id, needs_release):
+def submit_application(message, full_name, group_name, faculty, event_id, needs_release, age):
     try:
+        if message.text.strip() == "❌ Выйти в главное меню":  
+            cancel_action(message)
+            return
+
         user_id = message.from_user.id
-        needs_volunteer_hours = 1 if message.text.lower() == 'да' else 0  # 1 - да; 0 - нет
+
+        # Проверяем, какой ответ выбрал пользователь
+        if message.text.strip().lower() == "да":
+            needs_volunteer_hours = 1
+        elif message.text.strip().lower() == "нет":
+            needs_volunteer_hours = 0
+        else:
+            # Если пользователь ввел что-то другое, просим повторить
+            bot.send_message(
+                message.chat.id,
+                "Пожалуйста, выберите 'Да' или 'Нет'.",
+                reply_markup=create_yes_no_keyboard()
+            )
+            bot.register_next_step_handler(message, lambda msg: submit_application(msg, full_name, group_name, faculty, event_id, needs_release, age))
+            return
 
         # Проверяем текущее количество заявок на мероприятие
         cursor.execute('SELECT COUNT(*) FROM applications WHERE event_id=?', (event_id,))
@@ -882,8 +2336,8 @@ def submit_application(message, full_name, group_name, faculty, event_id, needs_
 
         # Вставляем заявку в базу данных
         cursor.execute(
-            'INSERT INTO applications (full_name , group_name , faculty , event_id , user_id , needs_release , needs_volunteer_hours) VALUES (?, ?, ?, ?, ?, ?, ?)',
-            (full_name, group_name, faculty, event_id, user_id, needs_release, needs_volunteer_hours)
+            'INSERT INTO applications (full_name, group_name, faculty, event_id, user_id, needs_release, needs_volunteer_hours, age) VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+            (full_name, group_name, faculty, event_id, user_id, needs_release, needs_volunteer_hours, age)
         )
         
         conn.commit()
@@ -896,20 +2350,34 @@ def submit_application(message, full_name, group_name, faculty, event_id, needs_
             event_name = event_info[0]
             event_link = event_info[1]  # Получаем ссылку на мероприятие
 
-            cursor.execute('INSERT OR REPLACE INTO saved_applications (user_id , full_name , group_name , faculty) VALUES (?, ?, ?, ?)', 
-                           (user_id, full_name, group_name, faculty))
+            cursor.execute('INSERT OR REPLACE INTO saved_applications (user_id, full_name, group_name, faculty, age) VALUES (?, ?, ?, ?, ?)', 
+                           (user_id, full_name, group_name, faculty, age))
             
             conn.commit()
 
+            # Получаем username пользователя
+            username = message.from_user.username
+            if not username:  # Если username отсутствует, используем first_name
+                username = message.from_user.first_name
+
+            # Отправляем заявку администратору с username пользователя
             for admin in ADMIN_IDS:
                 bot.send_message(
                     admin,
-                    f"Новая заявка:\nФИО: {full_name}\nГруппа: {group_name}\nФакультет: {faculty}\nМероприятие: {event_name}\nНужно освобождение: {'Да' if needs_release else 'Нет'}\nНужны волонтёрские часы: {'Да' if needs_volunteer_hours else 'Нет'}"
+                    f"Новая заявка:\n"
+                    f"Пользователь: @{username}\n"
+                    f"ФИО: {full_name}\n"
+                    f"Группа: {group_name}\n"
+                    f"Факультет: {faculty}\n"
+                    f"Возраст: {age}\n"
+                    f"Мероприятие: {event_name}\n"
+                    f"Нужно освобождение: {'Да' if needs_release else 'Нет'}\n"
+                    f"Нужны волонтёрские часы: {'Да' if needs_volunteer_hours else 'Нет'}"
                 )
             
             # Отправляем пользователю сообщение о статусе заявки
             if needs_volunteer_hours == 1:
-                bot.send_message(user_id, f"Ваша заявка отправлена! Ссылка на мероприятие: {event_link}")
+                bot.send_message(user_id, f"Ваша заявка отправлена!")
             else:
                 bot.send_message(user_id, "Ваша заявка отправлена! Вы не запросили волонтёрские часы.")
         else:
@@ -937,7 +2405,7 @@ def export_event_data(message):
                 markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
                 for event in events:
                     markup.add(event[0])
-                markup.add(types.KeyboardButton("❌ Отменить"))  
+                markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
                 bot.send_message(message.chat.id, "Выберите мероприятие для экспорта данных:", reply_markup=markup)
                 bot.register_next_step_handler(message, handle_event_selection_for_export)
             else:
@@ -953,7 +2421,7 @@ def export_event_data(message):
 
 def handle_event_selection_for_export(message):
     try:
-        if message.text.strip() == "❌ Отменить":
+        if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)
             return
 
@@ -1014,8 +2482,8 @@ def handle_event_selection_for_export(message):
 
 
 
-# Обработка нажатия кнопки "Отменить"
-@bot.message_handler(func=lambda message: message.text == "❌ Отменить")
+# Обработка нажатия кнопки "Выйти в главное меню"
+@bot.message_handler(func=lambda message: message.text == "❌ Выйти в главное меню")
 def cancel_action(message):
     bot.send_message(message.chat.id, "Вы вернулись в главное меню.")
     show_main_menu(message)
@@ -1048,7 +2516,7 @@ def request_event_link(message):
                 markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
                 for event in available_events:
                     markup.add(event)
-                markup.add(types.KeyboardButton("❌ Отменить"))  
+                markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
                 bot.send_message(
                     message.chat.id, "Выберите мероприятие для запроса ссылки:", reply_markup=markup)
                 bot.register_next_step_handler(message, handle_request_link)
@@ -1071,7 +2539,7 @@ def handle_request_link(message):
         print(f"Получен выбор мероприятия: {message.text}")  # Отладочное сообщение
         selected_event = message.text.strip()
         
-        if selected_event == "❌ Отменить":
+        if selected_event == "❌ Выйти в главное меню":
             cancel_action(message)
             return
 
@@ -1120,7 +2588,7 @@ def prompt_send_link(message):
                 markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
                 for event in events:
                     markup.add(event[0])  
-                markup.add(types.KeyboardButton("❌ Отменить"))  
+                markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
                 bot.send_message(message.chat.id, "Выберите мероприятие для отправки ссылки:", reply_markup=markup)
                 bot.register_next_step_handler(message, select_event_for_link)
             else:
@@ -1138,7 +2606,7 @@ def select_event_for_link(message):
     try:
         selected_event = message.text.strip()
         
-        if selected_event == "❌ Отменить":
+        if selected_event == "❌ Выйти в главное меню":
             cancel_action(message)
             return
 
@@ -1165,7 +2633,7 @@ def select_event_for_link(message):
                 cursor.execute('SELECT full_name FROM applications WHERE user_id=? AND event_id=?', (user[0], event_id))
                 full_name = cursor.fetchone()[0]
                 markup.add(full_name)  # Отображаем полное ФИО
-            markup.add(types.KeyboardButton("❌ Отменить"))  
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
             bot.send_message(message.chat.id, "Выберите пользователя для отправки ссылки:", reply_markup=markup)
             bot.register_next_step_handler(message, lambda msg: ask_for_link(msg, event_id))
         else:
@@ -1184,7 +2652,7 @@ def ask_for_link(message, event_id):
     try:
         selected_user_name = message.text.strip()
         
-        if selected_user_name == "❌ Отменить":
+        if selected_user_name == "❌ Выйти в главное меню":
             cancel_action(message)
             return
 
@@ -1206,7 +2674,7 @@ def ask_for_link(message, event_id):
 
         # Добавляем кнопку отмены здесь
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-        markup.add(types.KeyboardButton("❌ Отменить"))
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
         
         bot.send_message(message.chat.id, "Введите ссылку на мероприятие:", reply_markup=markup)
         
@@ -1222,7 +2690,7 @@ def ask_for_link(message, event_id):
 
 def send_link_to_user(message, selected_user):
     try:
-        if message.text.strip() == '❌ Отменить':
+        if message.text.strip() == '❌ Выйти в главное меню':
             cancel_action(message)
             return
         
@@ -1244,7 +2712,7 @@ def send_link_to_user(message, selected_user):
 
 
 def send_link_to_user(message, selected_user):
-    if message.text.strip() == '❌ Отменить':
+    if message.text.strip() == '❌ Выйти в главное меню':
         cancel_action(message)
         return
     
@@ -1254,49 +2722,37 @@ def send_link_to_user(message, selected_user):
    
     bot.send_message(message.chat.id, "Ссылка успешно отправлена выбранному пользователю!")
 
-# Обработка нажатия кнопки "Отменить"
-@bot.message_handler(func=lambda message: message.text == "❌ Отменить")
+# Обработка нажатия кнопки "Выйти в главное меню"
+@bot.message_handler(func=lambda message: message.text == "❌ Выйти в главное меню")
 def cancel_action(message):
       bot.send_message(
           message.chat.id,"Вы вернулись в главное меню.")
       show_main_menu(message) 
 
-# Обработка команды "Мои баллы"
-@bot.message_handler(func=lambda message: message.text == "🟢 Мои баллы")
-def show_user_points(message):
-   user_id = message.from_user.id
-   
-   cursor.execute('SELECT points FROM user_points WHERE user_id=?', (user_id,))
-   result = cursor.fetchone()
-
-   if result:
-       points = result[0]
-       bot.send_message(message.chat.id,f"У вас {points} баллов.")
-   else:
-       bot.send_message(message.chat.id,"У вас еще нет начисленных баллов.")
-
-# Обработка команды "Рейтинг"
-@bot.message_handler(func=lambda message: message.text == "🟢 Мои баллы")
+@bot.message_handler(func=lambda message: message.text in ["🔢 Мои баллы"])
 def show_user_points(message):
     try:
         user_id = message.from_user.id
         
+        # Запрос к базе данных для получения баллов пользователя
         cursor.execute('SELECT points FROM user_points WHERE user_id=?', (user_id,))
         result = cursor.fetchone()
 
         if result:
             points = result[0]
-            bot.send_message(message.chat.id, f"У вас {points} баллов.")
+            bot.send_message(message.chat.id, f"У тебя {points} баллов! 🎉 Как думаешь, сколько еще сможешь набрать? 😊")
         else:
-            bot.send_message(message.chat.id, "У вас еще нет начисленных баллов.")
+            bot.send_message(message.chat.id, "У тебя пока нет баллов. 😔 Но ты можешь начать прямо сейчас! 💪")
     
     except sqlite3.Error as e:
+        # Логирование ошибки базы данных
         print(f"Ошибка при получении баллов пользователя: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при получении данных.")
+        bot.send_message(message.chat.id, "Произошла ошибка при получении данных. Пожалуйста, попробуйте позже.")
     
     except Exception as e:
+        # Логирование общей ошибки
         print(f"Общая ошибка при показе баллов: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка.")
+        bot.send_message(message.chat.id, "Произошла ошибка. Пожалуйста, попробуйте позже.")
 
 @bot.message_handler(func=lambda message: message.text == "🏆 Рейтинг")
 def show_rating(message):
@@ -1343,7 +2799,7 @@ def prompt_add_event(message):
         button_start_time = types.KeyboardButton("Введите время начала")
         button_end_time = types.KeyboardButton("Введите время окончания")
         button_save = types.KeyboardButton("Сохранить")
-        button_cancel = types.KeyboardButton("❌ Отменить")
+        button_cancel = types.KeyboardButton("❌ Выйти в главное меню")
         
         markup.add(button_name, button_link)
         markup.add(button_description, button_max_participants)
@@ -1370,7 +2826,7 @@ def decline_participation(message):
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
         for event in events:
             markup.add(event[1])  
-        markup.add(types.KeyboardButton("❌ Отменить"))  
+        markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
         
         bot.send_message(message.chat.id, "Выберите мероприятие, от которого хотите отказаться:", reply_markup=markup)
         bot.register_next_step_handler(message, select_event_to_decline)
@@ -1379,7 +2835,7 @@ def decline_participation(message):
 
 
 def select_event_to_decline(message):
-    if message.text.strip() == "❌ Отменить":
+    if message.text.strip() == "❌ Выйти в главное меню":
         cancel_action(message)
         return
 
@@ -1434,7 +2890,7 @@ def select_event_to_decline(message):
 def decline_participation_reason(message, event_id):
     reason = message.text.strip()
     
-    if reason == "❌ Отменить":
+    if reason == "❌ Выйти в главное меню":
         cancel_action(message)
         return
 
@@ -1474,12 +2930,12 @@ def decline_participation_reason(message, event_id):
 
 
 
-@bot.message_handler(func=lambda message: message.text in ["Введите название", "Введите ссылку", "Введите описание", "Введите максимальное количество участников", "Введите время начала", "Введите время окончания", "Сохранить", "❌ Отменить"])
+@bot.message_handler(func=lambda message: message.text in ["Введите название", "Введите ссылку", "Введите описание", "Введите максимальное количество участников", "Введите время начала", "Введите время окончания", "Сохранить", "❌ Выйти в главное меню"])
 def handle_add_event_input(message):
     try:
         global event_data
         
-        if message.text == "❌ Отменить":
+        if message.text == "❌ Выйти в главное меню":
             bot.send_message(message.chat.id, "Вы отменили добавление мероприятия.")
             return
         
@@ -1710,7 +3166,7 @@ def prompt_edit_event(message):
                 markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
                 for event in events:
                     markup.add(event[0])
-                markup.add(types.KeyboardButton("❌ Отменить"))
+                markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
                 bot.send_message(message.chat.id, "Выберите мероприятие для редактирования:", reply_markup=markup)
                 bot.register_next_step_handler(message, handle_edit_event_selection)
             else:
@@ -1726,7 +3182,7 @@ def prompt_edit_event(message):
 
 def handle_edit_event_selection(message):
     try:
-        if message.text.strip() == "❌ Отменить":
+        if message.text.strip() == "❌ Выйти в главное меню":
             bot.send_message(message.chat.id, "Вы отменили редактирование мероприятия.")
             return
         
@@ -1743,7 +3199,7 @@ def handle_edit_event_selection(message):
             button_start_time = types.KeyboardButton("Изменить время начала")
             button_end_time = types.KeyboardButton("Изменить время окончания")
             button_save = types.KeyboardButton("Сохранить изменения")
-            button_cancel = types.KeyboardButton("❌ Отменить")
+            button_cancel = types.KeyboardButton("❌ Выйти в главное меню")
             
             markup.add(button_name, button_link)
             markup.add(button_description, button_max_participants)
@@ -1766,7 +3222,7 @@ def handle_edit_event_selection(message):
 
 def handle_edit_event_input(message, event_name):
     try:
-        if message.text.strip() == "❌ Отменить":
+        if message.text.strip() == "❌ Выйти в главное меню":
             bot.send_message(message.chat.id, "Вы отменили редактирование мероприятия.")
             return
         
@@ -1959,7 +3415,7 @@ def notify_subscribers(event_name):
 # Функция для удаления истекших мероприятий
 def remove_expired_events():
     # Создаем новое соединение и курсор для работы с базой данных
-    conn = sqlite3.connect('/app/data/volunteer_bot.db', check_same_thread=False)
+    conn = sqlite3.connect('/app/data/volunter_bot.db', check_same_thread=False)
     cursor = conn.cursor()
     
     while True:
@@ -2010,7 +3466,7 @@ def delete_event(message):
             markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
             for event in events:
                 markup.add(event[0])
-            markup.add(types.KeyboardButton("❌ Отменить"))  # Добавляем кнопку отмены здесь
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  # Добавляем кнопку отмены здесь
             bot.send_message(
                 message.chat.id, "Выберите мероприятие для удаления:", reply_markup=markup
             )
@@ -2025,7 +3481,7 @@ def delete_event(message):
 def confirm_delete_event(message):
     selected_event = message.text.strip()
 
-    if selected_event == "❌ Отменить":
+    if selected_event == "❌ Выйти в главное меню":
         cancel_action(message)
         return
 
@@ -2051,7 +3507,7 @@ def send_points_menu(message):
                 markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
                 for event in events:
                     markup.add(event[0])
-                markup.add(types.KeyboardButton("❌ Отменить"))  
+                markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
                 bot.send_message(message.chat.id, "Выберите мероприятие для отправки баллов:", reply_markup=markup)
                 bot.register_next_step_handler(message, select_user_for_points)
             else:
@@ -2069,7 +3525,7 @@ def select_user_for_points(message):
     try:
         selected_event = message.text.strip()
         
-        if selected_event == "❌ Отменить":
+        if selected_event == "❌ Выйти в главное меню":
             cancel_action(message)  
             return
         
@@ -2090,7 +3546,7 @@ def select_user_for_points(message):
             markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
             for app in applicants:
                 markup.add(app[0])
-            markup.add(types.KeyboardButton("❌ Отменить"))  
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
             bot.send_message(message.chat.id, "Выберите пользователя для начисления баллов:", reply_markup=markup)
             bot.register_next_step_handler(message, lambda msg: set_points(msg, event_id))
         else:
@@ -2107,7 +3563,7 @@ def select_user_for_points(message):
 
 def set_points(message, selected_event_id):
     try:
-        if message.text.strip() == "❌ Отменить":
+        if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)  
             return
         
@@ -2138,7 +3594,7 @@ def set_points(message, selected_event_id):
 
 def update_points(message, event_id, user_id):
     try:
-        if message.text.strip() == "❌ Отменить":
+        if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)  
             return
 
@@ -2233,7 +3689,7 @@ def prompt_send_report(message):
                 markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
                 for event in available_events:
                     markup.add(event)
-                markup.add(types.KeyboardButton("❌ Отменить"))  
+                markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
                 bot.send_message(
                     message.chat.id, "Выберите мероприятие для отправки отчета:", reply_markup=markup)
                 bot.register_next_step_handler(message, check_application_before_report)  
@@ -2254,7 +3710,7 @@ def prompt_send_report(message):
 def check_application_before_report(message):
     try:
         selected_event = message.text.strip()     
-        if selected_event == "❌ Отменить":
+        if selected_event == "❌ Выйти в главное меню":
             cancel_action(message)
             return
         
@@ -2273,7 +3729,7 @@ def check_application_before_report(message):
         
         if application_exists and application_exists[6] != "отменена":  
             markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
-            markup.add(types.KeyboardButton("❌ Отменить"))  
+            markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  
             
             bot.send_message(
                 message.chat.id,
@@ -2299,8 +3755,8 @@ def check_application_before_report(message):
 
 def handle_report_content(message, event_id):
     try:
-        # Проверка на кнопку "Отменить"
-        if message.text and message.text.strip() == '❌ Отменить':
+        # Проверка на кнопку "Выйти в главное меню"
+        if message.text and message.text.strip() == '❌ Выйти в главное меню':
             cancel_action(message)
             return
 
@@ -2363,8 +3819,8 @@ def handle_report_content(message, event_id):
 
 
 
-# Обработка нажатия кнопки "Отменить"
-@bot.message_handler(func=lambda message: message.text == "❌ Отменить")
+# Обработка нажатия кнопки "Выйти в главное меню"
+@bot.message_handler(func=lambda message: message.text == "❌ Выйти в главное меню")
 def cancel_action(message):
       bot.send_message(
           message.chat.id,"Вы вернулись в главное меню.")
@@ -2423,4 +3879,9 @@ if __name__ == "__main__":
             print(f"Произошла ошибка: {e}")
             print("Перезапуск бота...")
             os.execv(sys.executable, ['python'] + sys.argv)  # Перезапускаем текущий скрипт
+
+
+
+
+
 
