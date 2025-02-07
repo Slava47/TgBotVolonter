@@ -20,10 +20,19 @@ import openpyxl
 
 TOKEN = os.getenv('TOKEN')  # Используйте имя переменной без префикса '$'
 bot = telebot.TeleBot(TOKEN)
+
 # Подключение к базе данных
 conn = sqlite3.connect('/app/data/volunter_bot.db', check_same_thread=False)
 cursor = conn.cursor()
-
+# В разделе создания таблиц
+cursor.execute('''
+    CREATE TABLE IF NOT EXISTS warnings (
+        user_id INTEGER PRIMARY KEY,
+        warnings_count INTEGER DEFAULT 0,
+        last_warning_time DATETIME
+    )
+''')
+conn.commit()
 cursor.execute('''
     CREATE TABLE IF NOT EXISTS blocked_users (
         user_id INTEGER PRIMARY KEY,
@@ -214,15 +223,41 @@ add_start_time_column()
 conn.commit()
 
 # ID администраторов
-ADMIN_IDS = [5656088749,893172924,1375841281]  # Замените на ID ваших администраторов
-
+ADMIN_IDS = [5656088749]  # Замените на ID ваших администраторов
 # Глобальные переменные и списки
 user_ids = []
 last_message_time = {}
 repeat_count = {}
 user_captchas = {}
 user_requests = {}
+def update_blocked_users():
+    while True:
+        try:
+            cursor.execute('SELECT user_id, block_time FROM blocked_users')
+            blocked = cursor.fetchall()
 
+            now = datetime.now()
+            for user in blocked:
+                block_time_str = user[1]  # строка с временем блокировки
+                if block_time_str:  # проверяем, что строка не пуста
+                    block_time = datetime.strptime(block_time_str, '%Y-%m-%d %H:%M:%S.%f')
+                    if block_time <= now:
+                        cursor.execute('DELETE FROM blocked_users WHERE user_id = ?', (user[0],))
+                        conn.commit()
+                else:  # Если дата не указана, удаляем запись
+                    cursor.execute('DELETE FROM blocked_users WHERE user_id = ?', (user[0],))
+                    conn.commit()
+            print("Список заблокированных пользователей обновлён.")
+        except Exception as e:
+            print(f"Ошибка при обновлении списка заблокированных: {e}")
+        
+        time.sleep(60)  # Ждём 60 секунд
+
+
+# Запускаем функцию в отдельном потоке
+thread = threading.Thread(target=update_blocked_users)
+thread.daemon = True  # Чтобы поток завершался при выходе из программы
+thread.start()
 # Функция генерации капчи
 def generate_captcha(text):
     try:
@@ -300,7 +335,7 @@ def check_captcha(message, correct_text):
                 bot.send_message(message.chat.id, "😔 Ты исчерпал все попытки ввода капчи. Попробуй позже или обратись к администратору.")
                 
                 # Блокировка пользователя на 30 минут
-                cursor.execute('INSERT OR REPLACE INTO blocked_users (user_id, block_time) VALUES (?, ?)', (user_id, datetime.now() + timedelta(minutes=30)))
+                cursor.execute('INSERT OR REPLACE INTO blocked_users (user_id, block_time) VALUES (?, ?)', (user_id, datetime.now() + timedelta(minutes=5)))
                 conn.commit()
     
     except Exception as e:
@@ -350,57 +385,100 @@ from datetime import datetime
 
 @bot.message_handler(commands=['start'])
 def start(message):
+    user_id = message.from_user.id  # Получаем ID пользователя
+
     try:
-        user_id = message.from_user.id
-        
-        # Проверка блокировки пользователя
+        # Проверка блокировки
+        cursor = conn.cursor()  # Создаем курсор
         cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
         block_result = cursor.fetchone()
-        
-        if block_result and block_result[0]:
-            # Удаляем микросекунды из строки
-            block_time_str = block_result[0].split('.')[0]
-            
-            # Преобразуем строку в datetime
-            block_time = datetime.strptime(block_time_str, '%Y-%m-%d %H:%M:%S')
-            
-            if block_time > datetime.now():
-                bot.send_message(message.chat.id, "Ты временно заблокирован. Попробуй позже.")
-                return
-        
-        # Если пользователь уже прошёл капчу, показываем меню
+        cursor.close()  # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+          bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+          return
+       
+
+        # Проверка состояния капчи
+        cursor = conn.cursor()  # Создаем новый курсор
         cursor.execute('SELECT has_passed_captcha FROM user_states WHERE user_id = ?', (user_id,))
         result = cursor.fetchone()
-        
+        cursor.close()  # Закрываем курсор после использования
+
         if result and result[0] == 1:
-            current_hour = datetime.now().hour
-            if 6 <= current_hour < 12:
-                greeting = "Доброе утро! ☀️"
-            elif 12 <= current_hour < 18:
-                greeting = "Добрый день! 😊"
-            elif 18 <= current_hour < 22:
-                greeting = "Добрый вечер! 🌙"
-            else:
-                greeting = "Доброй ночи! 🌌"
-            
+            greeting = get_greeting_message(datetime.now().hour)
             bot.send_message(message.chat.id, f"{greeting} Рад снова тебя видеть!")
-            show_main_menu(message)
+            show_main_menu(message)  # Вызов главного меню
         else:
             # Генерация и отправка капчи
-            captcha_text = ''.join(random.choices(string.ascii_uppercase + string.digits, k=6))
+            captcha_text = generate_captcha_text()
             captcha_image = generate_captcha(captcha_text)
             user_captchas[user_id] = captcha_text
             
-            with BytesIO() as captcha_file:
-                captcha_image.save(captcha_file, format='PNG')
-                captcha_file.seek(0)
-                bot.send_photo(message.chat.id, captcha_file)
-                bot.send_message(message.chat.id, "Привет! Для начала введи текст с картинки, чтобы мы точно знали что ты человек! 🤖")                                      
-                bot.register_next_step_handler(message, lambda msg: check_captcha(msg, captcha_text))
-    
+            send_captcha_image(message.chat.id, captcha_image)
+            bot.send_message(message.chat.id, "Привет! Для начала введи текст с картинки, чтобы мы точно знали, что ты человек! 🤖")
+            bot.register_next_step_handler(message, lambda msg: check_captcha(msg, captcha_text))
+
     except Exception as e:
-        print(f"Ошибка при отправке капчи: {e}")
-        
+        print(f"Ошибка при обработке команды /start для пользователя {user_id}: {e}")
+
+def get_greeting_message(current_hour):
+    """Возвращает приветственное сообщение на основе текущего времени."""
+    if 6 <= current_hour < 12:
+        return "Доброе утро! ☀️"
+    elif 12 <= current_hour < 18:
+        return "Добрый день! 😊"
+    elif 18 <= current_hour < 22:
+        return "Добрый вечер! 🌙"
+    else:
+        return "Доброй ночи! 🌌"
+
+def generate_captcha_text(length=6):
+    """Генерирует текст капчи из случайных символов и цифр."""
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+
+def send_captcha_image(chat_id, captcha_image):
+    """Отправляет изображение капчи пользователю."""
+    with BytesIO() as captcha_file:
+        captcha_image.save(captcha_file, format='PNG')
+        captcha_file.seek(0)
+        bot.send_photo(chat_id, captcha_file)
+
+def check_warnings():
+    while True:
+        # Выполняем SELECT-запрос
+        read_cursor = conn.cursor()
+        try:
+            read_cursor.execute('SELECT user_id, warnings_count FROM warnings WHERE warnings_count >= 3')
+            users_to_block = read_cursor.fetchall()
+        finally:
+            read_cursor.close()  # Убедитесь, что курсор закрывается
+
+        # Обрабатываем список пользователей, полученных из SELECT
+        for user in users_to_block:
+            user_id = user[0]
+            try:
+                # Используем отдельный курсор для записи
+                write_cursor = conn.cursor()
+                try:
+                    write_cursor.execute(
+                        'INSERT OR REPLACE INTO blocked_users (user_id, block_time) VALUES (?, ?)',
+                        (user_id, datetime.now() + timedelta(days=365))
+                    )
+                    conn.commit()  # Фиксируем изменения в базе данных
+                finally:
+                    write_cursor.close()  # Убедитесь, что курсор закрывается
+
+                # Отправляем сообщение пользователю
+                bot.send_message(user_id, "🚫 Вы были автоматически заблокированы за 3 предупреждения!")
+
+            except Exception as e:  # Ловим общие исключения
+                print(f"Ошибка при блокировке пользователя {user_id}: {e}")
+
+        # Задержка перед следующим циклом
+        time.sleep(60)
+
+threading.Thread(target=check_warnings, daemon=True).start()        
 def check_captcha_passed(message):
     try:
         user_id = message.from_user.id
@@ -448,7 +526,20 @@ def show_main_menu(message):
 # Обработка выбора категории
 @bot.message_handler(func=lambda message: message.text in ["📅 Мероприятия", "📋 Задания", "👤 Профиль", "⚙️ Администрирование", "❓ Задать вопрос"])
 def handle_category_selection(message):
+    user_id = message.from_user.id  # Получаем ID пользователя
+
     try:
+        # Проверка блокировки
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+        cursor.close()  # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
+
+        # Обработка выбранной категории
         if message.text == "📅 Мероприятия":
             show_events_menu(message)
         elif message.text == "📋 Задания":
@@ -459,12 +550,28 @@ def handle_category_selection(message):
             show_admin_menu(message)
         elif message.text == "❓ Задать вопрос":
             ask_question(message)  # Обработка кнопки "Задать вопрос"
+
     except Exception as e:
         print(f"Ошибка при обработке выбора категории: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при обработке вашего запроса.")
+
 
 # Подменю для мероприятий
 def show_events_menu(message):
+    user_id = message.from_user.id  # Получаем ID пользователя
+
     try:
+        # Проверка блокировки
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+        cursor.close()  # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
+
+        # Отображение меню мероприятий
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         
         buttons = [
@@ -478,12 +585,28 @@ def show_events_menu(message):
             markup.add(button)
         
         bot.send_message(message.chat.id, "Выбери действие:", reply_markup=markup)
+    
     except Exception as e:
         print(f"Ошибка при отображении меню мероприятий: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при отображении меню.")
+
 
 # Подменю для заданий
 def show_tasks_menu(message):
+    user_id = message.from_user.id  # Получаем ID пользователя
+
     try:
+        # Проверка блокировки
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+        cursor.close()  # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
+
+        # Отображение меню заданий
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         
         buttons = [
@@ -496,19 +619,34 @@ def show_tasks_menu(message):
             markup.add(button)
         
         bot.send_message(message.chat.id, "Выбери действие:", reply_markup=markup)
+    
     except Exception as e:
         print(f"Ошибка при отображении меню заданий: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при отображении меню.")
+
 
     
  
 # Подменю для профиля
 def show_profile_menu(message):
+    user_id = message.from_user.id  # Получаем ID пользователя
+
     try:
-        user_id = message.from_user.id
-        
+        # Проверка блокировки
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+        cursor.close()  # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
+
         # Получаем данные пользователя из таблицы saved_applications
+        cursor = conn.cursor()  # Создаем новый курсор
         cursor.execute('SELECT full_name, group_name, faculty, age FROM saved_applications WHERE user_id=?', (user_id,))
         user_data = cursor.fetchone()
+        cursor.close()  # Закрываем курсор после использования
         
         if user_data:
             full_name, group_name, faculty, age = user_data
@@ -547,6 +685,7 @@ def show_profile_menu(message):
         print(f"Ошибка при отображении меню профиля: {e}")
         bot.send_message(message.chat.id, "Произошла ошибка при загрузке данных.")
 
+
 # Подменю для администрирования
 def show_admin_menu(message):
     try:
@@ -563,6 +702,9 @@ def show_admin_menu(message):
             types.KeyboardButton("🟢 Экспорт данных о мероприятии"),
             types.KeyboardButton("🟢 Отправить баллы"),
             types.KeyboardButton("🟢 Рассмотреть отчеты"),
+            types.KeyboardButton("⚠️ Вынести предупреждение"),
+            types.KeyboardButton("⛔ Заблокировать пользователя"),
+            types.KeyboardButton("🔓 Разблокировать пользователя"),
             types.KeyboardButton("📊 Полный отчет по боту"),
             types.KeyboardButton("🟢 Отправить ссылку на получение часов"),  # Новая кнопка
             types.KeyboardButton("🔙 Назад")
@@ -723,11 +865,23 @@ def send_question_to_admins(message):
         
         # Уведомляем пользователя
         bot.send_message(message.chat.id, "Спасибо за твой вопрос! Я уже отправил его администраторам. Они свяжутся с тобой, как только смогут. 😉")
+        show_main_menu(message)
+        
     except Exception as e:
         print(f"Ошибка при отправке вопроса: {e}")
         bot.send_message(message.chat.id, "Упс! Что-то пошло не так. Попробуй отправить вопрос позже. Мы уже разбираемся с проблемой! 🛠️")
 def ask_question(message):
     try:
+        # Проверка блокировки
+        user_id = message.from_user.id
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+        cursor.close()  # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         markup.add(types.KeyboardButton("❌ Выйти в главное меню"))  # Добавляем кнопку выхода
         bot.send_message(message.chat.id, "Напиши свой вопрос", reply_markup=markup)
@@ -738,14 +892,25 @@ def ask_question(message):
 
 def handle_question_input(message):
     try:
-        if message.text.strip() == "❌ Выйти в главное меню":
-            cancel_action(message)  # Возвращаем пользователя в главное меню
+        # Проверка типа сообщения
+        if message.content_type != 'text':
+            bot.send_message(message.chat.id, "⚠ Пожалуйста, используйте текстовые сообщения для отправки вопроса.")
+            bot.register_next_step_handler(message, handle_question_input)
             return
-        else:
-            send_question_to_admins(message)  # Отправляем вопрос администраторам
+
+        # Обработка кнопки "Выйти в главное меню"
+        if message.text.strip() == "❌ Выйти в главное меню":
+            cancel_action(message)
+            return
+
+        # Отправка вопроса администраторам
+        send_question_to_admins(message)
+
     except Exception as e:
-        print(f"Ошибка при обработке вопроса: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка. Попробуй позже.")
+        print(f"Ошибка при обработке вопроса: {str(e)}")
+        bot.send_message(message.chat.id, "🚫 Произошла ошибка, попробуйте позже.")
+        show_main_menu(message)
+
 
 
 # Отправка вопроса администраторам
@@ -753,6 +918,144 @@ def handle_question_input(message):
 # Обработка кнопки "Изменить задание"
 
 # Функция для отображения главного меню
+@bot.message_handler(func=lambda message: message.text == "⚠️ Вынести предупреждение")
+def warn_user_step1(message):
+    if message.from_user.id in ADMIN_IDS:
+        current_user_id = message.from_user.id 
+        
+        cursor.execute('''
+            SELECT sa.user_id, sa.full_name 
+            FROM saved_applications sa
+            LEFT JOIN blocked_users bu 
+                ON sa.user_id = bu.user_id 
+                AND bu.block_time > CURRENT_TIMESTAMP
+            WHERE bu.user_id IS NULL
+                AND sa.user_id != ?  
+        ''', (current_user_id,))  
+        users = cursor.fetchall()
+        
+        if users:
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for user in users:
+                markup.add(f"{user[1]} (ID: {user[0]})")
+            markup.add("❌ Отмена")
+            bot.send_message(message.chat.id, "Выберите пользователя:", reply_markup=markup)
+            bot.register_next_step_handler(message, warn_user_step2)
+        else:
+            bot.send_message(message.chat.id, "Нет пользователей для вынесения предупреждения.")
+
+def warn_user_step2(message):
+    if message.text == "❌ Отмена":
+        return show_admin_menu(message)
+    
+    try:
+        user_id = int(message.text.split("(ID: ")[1].replace(")", ""))
+        
+        # Дополнительная проверка блокировки
+        cursor.execute('''
+            SELECT block_time 
+            FROM blocked_users 
+            WHERE user_id = ? 
+                AND block_time > CURRENT_TIMESTAMP
+        ''', (user_id,))
+        if cursor.fetchone():
+            bot.send_message(message.chat.id, "Этот пользователь уже заблокирован!")
+            return
+
+        # Добавление/обновление предупреждения
+        cursor.execute('''
+            INSERT INTO warnings (user_id, warnings_count, last_warning_time)
+            VALUES (?, 1, ?)
+            ON CONFLICT(user_id) DO UPDATE SET
+                warnings_count = warnings_count + 1,
+                last_warning_time = ?
+        ''', (user_id, datetime.now(), datetime.now()))
+        conn.commit()
+
+        # Проверка на автоматическую блокировку
+        cursor.execute('SELECT warnings_count FROM warnings WHERE user_id = ?', (user_id,))
+        count = cursor.fetchone()[0]
+        
+        if count >= 3:
+            cursor.execute('''
+                INSERT OR REPLACE INTO blocked_users 
+                (user_id, block_time)
+                VALUES (?, ?)
+            ''', (user_id, datetime.now() + timedelta(days=365)))
+            conn.commit()
+
+        # Отправка уведомлений
+        try:
+            if count >= 3:
+                bot.send_message(user_id, "🚫 Вы были заблокированы за 3 предупреждения!")
+            else:
+                bot.send_message(user_id, f"⚠️ Предупреждение {count}/3! При 3-х вы будете заблокированы!")
+        except Exception as e:
+            print(f"Ошибка отправки уведомления: {e}")
+
+        bot.send_message(message.chat.id, f"✅ Пользователь получил {count}/3 предупреждений!")
+
+    except Exception as e:
+        print(f"Ошибка при вынесении предупреждения: {e}")
+        bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса")
+
+@bot.message_handler(func=lambda message: message.text == "⛔ Заблокировать пользователя")
+def ban_user_step1(message):
+    if message.from_user.id in ADMIN_IDS:
+        current_user_id = message.from_user.id  
+        
+        cursor.execute('''
+            SELECT sa.user_id, sa.full_name 
+            FROM saved_applications sa
+            LEFT JOIN blocked_users bu ON sa.user_id = bu.user_id
+            WHERE (bu.user_id IS NULL OR bu.block_time < ?)
+                AND sa.user_id != ?  
+        ''', (datetime.now(), current_user_id))  
+        
+        users = cursor.fetchall()
+        
+        if users:
+            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for user in users:
+                markup.add(f"{user[1]} (ID: {user[0]})")
+            markup.add("❌ Отмена")
+            bot.send_message(message.chat.id, "Выберите пользователя для блокировки:", reply_markup=markup)
+            bot.register_next_step_handler(message, ban_user_step2)
+        else:
+            bot.send_message(message.chat.id, "Нет пользователей для блокировки.")
+    else:
+        bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
+
+def ban_user_step2(message):
+    if message.text == "❌ Отмена":
+        return show_admin_menu(message)
+    
+    try:
+        user_id = int(message.text.split("(ID: ")[1].replace(")", ""))
+        
+        # Проверяем, не заблокирован ли пользователь уже
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+        
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S') > datetime.now():
+            bot.send_message(message.chat.id, "Этот пользователь уже заблокирован.")
+            return show_admin_menu(message)
+        
+        # Блокируем пользователя
+        cursor.execute('INSERT OR REPLACE INTO blocked_users (user_id, block_time) VALUES (?, ?)',
+                      (user_id, datetime.now() + timedelta(days=365)))
+        conn.commit()
+        
+        try:
+            bot.send_message(user_id, "🚫 Вы были заблокированы администратором!")
+        except:
+            pass
+        
+        bot.send_message(message.chat.id, "Пользователь заблокирован!")
+        show_main_menu(message)
+    except Exception as e:
+        print(f"Ошибка при блокировке пользователя: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при блокировке пользователя.")
 @bot.message_handler(func=lambda message: message.text == "📊 Полный отчет по боту")
 def generate_full_report(message):
     try:
@@ -848,6 +1151,16 @@ def generate_full_report(message):
 @bot.message_handler(func=lambda message: message.text == "📝 Отправить отчет по заданию")
 def prompt_send_task_report(message):
     try:
+        # Проверка блокировки
+        user_id = message.from_user.id
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+               # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
         # Получаем список заданий, на которые пользователь записан
         cursor.execute('SELECT task_id FROM task_applications WHERE user_id = ?', (message.from_user.id,))
         user_tasks = cursor.fetchall()
@@ -897,6 +1210,13 @@ def prompt_send_task_report(message):
 
 def handle_task_report_selection(message):
     try:
+        # Проверка типа сообщения
+        if message.content_type != 'text':
+            bot.send_message(message.chat.id, "⚠ Пожалуйста, используйте кнопки.")
+            bot.register_next_step_handler(message, handle_task_report_selection)
+            return
+
+        # Проверка команды выхода в главное меню
         if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)
             return
@@ -992,7 +1312,7 @@ def save_task_report(message, task_id):
                     bot.send_video(admin, media_file_id, caption="🎥 Медиафайл из отчета")
 
         bot.send_message(message.chat.id, "✅ Твой отчет успешно отправлен на рассмотрение! Спасибо за старания! 😊")
-    
+        show_main_menu(message)
     except sqlite3.Error as e:
         print(f"Ошибка при сохранении отчета: {e}")
         bot.send_message(message.chat.id, "😅 Упс! Что-то пошло не так при сохранении отчета. Попробуй позже.")
@@ -1152,6 +1472,16 @@ def approve_or_reject_report(message, report_id, user_id, task_id):
 @bot.message_handler(func=lambda message: message.text == "📋 Список заданий")
 def show_tasks(message):
     try:
+        # Проверка блокировки
+        user_id = message.from_user.id
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+               # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
         cursor.execute('SELECT name FROM tasks')
         tasks = cursor.fetchall()
 
@@ -1174,6 +1504,13 @@ def show_tasks(message):
         bot.send_message(message.chat.id, "Произошла ошибка.")
 def handle_task_selection(message):
     try:
+        # Проверка типа сообщения
+        if message.content_type != 'text':
+            bot.send_message(message.chat.id, "⚠ Пожалуйста, используйте текстовые сообщения для выбора задачи.")
+            bot.register_next_step_handler(message, handle_task_selection)
+            return
+
+        # Проверка команды выхода в главное меню
         if message.text.strip() == "❌ Выйти в главное меню":
             cancel_action(message)
             return
@@ -1234,6 +1571,7 @@ def handle_task_application(message, task_id):
 
             if existing_application:
                 bot.send_message(message.chat.id, "Ты уже записан на это задание.")
+                show_main_menu(message)
                 return
 
             # Проверяем, есть ли сохраненные данные пользователя
@@ -1267,6 +1605,7 @@ def handle_task_application(message, task_id):
                     )
 
                 bot.send_message(message.chat.id, f"Ты успешно записан на задание '{task_name}'!")
+                show_main_menu(message)
             else:
                 # Если данных нет, запрашиваем их у пользователя
                 bot.send_message(message.chat.id, "Введи свое ФИО:")
@@ -1724,6 +2063,7 @@ def show_edit_menu(message):
 # ========== РЕДАКТИРОВАНИЕ ФИО ==========
 @bot.message_handler(func=lambda message: message.text == "✏️ Изменить ФИО")
 def edit_full_name(message):
+    
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
     markup.add(types.KeyboardButton("🔙 Назад"))
     msg = bot.send_message(message.chat.id, "✍️ Введи новое ФИО:", reply_markup=markup)
@@ -1734,6 +2074,7 @@ def process_full_name(message):
         return show_edit_menu(message)
     
     try:
+       
         cursor.execute('UPDATE saved_applications SET full_name=? WHERE user_id=?', 
                       (message.text, message.from_user.id))
         conn.commit()
@@ -2234,6 +2575,17 @@ def create_yes_no_keyboard():
 @bot.message_handler(func=lambda message: message.text == "🟢 Записаться на мероприятие")
 def get_event_for_application(message):
     try:
+        # Проверка блокировки пользователя
+        user_id = message.from_user.id
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+        
+        # Если пользователь заблокирован
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "🚫 Вы заблокированы и не можете записываться на мероприятия.")
+            return  # Прерываем выполнение функции
+
+        # Если пользователь не заблокирован, продолжаем
         cursor.execute('SELECT name FROM events')
         events = cursor.fetchall()
 
@@ -2257,6 +2609,13 @@ def get_event_for_application(message):
 
 def handle_event_selection_for_application(message):
     try:
+        # Проверяем тип контента сначала
+        if message.content_type != 'text':
+            bot.send_message(message.chat.id, "⚠ Пожалуйста, используйте текстовые сообщения для выбора мероприятия.")
+            bot.register_next_step_handler(message, handle_event_selection_for_application)
+            return
+
+        # Затем проверяем специальные команды
         if message.text.strip() == "❌ Выйти в главное меню":  
             cancel_action(message)
             return
@@ -2308,9 +2667,11 @@ def confirm_event_registration(message, event_id, event_name):
                     cursor.execute('UPDATE applications SET status = "подтверждена" WHERE id = ?', (existing_application[0],))
                     conn.commit()
                     bot.send_message(message.chat.id, "Твоя заявка восстановлена.")
+                    show_main_menu(message)
                     return
-                elif existing_application[1] == "подтверждена":
+                elif existing_application[1] == "подтверждена":                   
                     bot.send_message(message.chat.id, "Ты уже подал заявку на это мероприятие.")
+                    show_main_menu(message)
                     return
             else:
                 # Если заявки нет, создаем новую
@@ -2374,7 +2735,7 @@ def save_age_and_continue(message, full_name, group_name, faculty, event_id):
         )
     
     except ValueError:
-        markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
+        markup = types.ReplyKeyboardMarkup
         markup.add(types.KeyboardButton("❌ Выйти в главное меню"))
         bot.send_message(
             message.chat.id, 
@@ -2582,10 +2943,13 @@ def submit_application(message, full_name, group_name, faculty, event_id, needs_
             # Отправляем пользователю сообщение о статусе заявки
             if needs_volunteer_hours == 1:
                 bot.send_message(user_id, f"Твоя заявка отправлена!")
+                show_main_menu(message)
             else:
                 bot.send_message(user_id, "Твоя заявка отправлена! Ты не запросил волонтёрские часы.")
+                show_main_menu(message)
         else:
             bot.send_message(user_id, "Произошла ошибка при получении информации о мероприятии.")
+            show_main_menu(message)
     
     except sqlite3.Error as e:
         print(f"Ошибка при отправке заявки: {e}")
@@ -3025,77 +3389,113 @@ def show_rating(message):
         
 @bot.message_handler(func=lambda message: message.text == "🚫 Отказаться от участия")
 def decline_participation(message):
-    user_id = message.from_user.id
-    
-    # Получаем список мероприятий, на которые пользователь записан и не отменил участие
-    cursor.execute('''
-        SELECT event_id, name 
-        FROM applications 
-        JOIN events ON applications.event_id = events.id 
-        WHERE user_id = ? AND status != "отменена"
-    ''', (user_id,))
-    events = cursor.fetchall()
-    
-    if events:
-        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
-        for event in events:
-            markup.add(event[1])  # Добавляем кнопки с названиями мероприятий
-        markup.add(types.KeyboardButton("🔙 Назад"))  # Добавляем кнопку "Назад"
-        
-        bot.send_message(message.chat.id, "Выбери мероприятие, от которого хочешь отказаться:", reply_markup=markup)
-        bot.register_next_step_handler(message, select_event_to_decline)
-    else:
-        bot.send_message(message.chat.id, "Ты не подали заявки на какие-либо мероприятия или уже отменил все свои заявки.")
+    try:
+        # Проверка блокировки
+        user_id = message.from_user.id
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+         # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
+
+        # Получаем список мероприятий, на которые пользователь записан и не отменил участие
+        cursor = conn.cursor()  # Создаем курсор, если он был закрыт ранее
+        cursor.execute('''
+            SELECT event_id, name 
+            FROM applications 
+            JOIN events ON applications.event_id = events.id 
+            WHERE user_id = ? AND status != "отменена"
+        ''', (user_id,))
+        events = cursor.fetchall()
+        cursor.close()  # Закрываем курсор после использования
+
+        if events:
+            marked_events = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+            for event in events:
+                marked_events.add(event[1])  # Добавляем кнопки с названиями мероприятий
+            marked_events.add(types.KeyboardButton("🔙 Назад"))  # Добавляем кнопку "Назад"
+
+            bot.send_message(message.chat.id, "Выбери мероприятие, от которого хочешь отказаться:", reply_markup=marked_events)
+            bot.register_next_step_handler(message, select_event_to_decline)
+        else:
+            bot.send_message(message.chat.id, "Ты не подали заявки на какие-либо мероприятия или уже отменил все свои заявки.")
+    except Exception as e:
+        print(f"Ошибка в обработке отказа: {e}")
+
 
 
 def select_event_to_decline(message):
-    if message.text.strip() == "🔙 Назад":  # Обработка кнопки "Назад"
-        show_main_menu(message)  # Возвращаем пользователя в главное меню
-        return
-
-    selected_event_name = message.text.strip()
-    
-    cursor.execute('SELECT event_id, name FROM applications JOIN events ON applications.event_id = events.id WHERE user_id = ?', (message.from_user.id,))
-    events = cursor.fetchall()
-    
-    for event in events:
-        if event[1] == selected_event_name:
-            event_id = event[0]
-            break
-    else:
-        bot.send_message(message.chat.id, "Выбранное мероприятие не найдено.")
-        return
-
-    # Проверка времени до начала мероприятия
-    cursor.execute('SELECT start_time FROM events WHERE id = ?', (event_id,))
-    start_time_result = cursor.fetchone()
-
-    if start_time_result and start_time_result[0]:  # Проверяем, что start_time_str не None
-        start_time_str = start_time_result[0]
-        start_time = datetime.strptime(start_time_str, '%Y-%m-%d %H:%M')
-        current_time = datetime.now()
-        
-        if (start_time - current_time).total_seconds() / 3600 < 12:
-            bot.send_message(message.chat.id, "Отмена участия невозможна менее чем за 12 часов до начала мероприятия. Обратись к администратору.")
+    try:
+        # Проверка типа сообщения
+        if message.content_type != 'text':
+            bot.send_message(message.chat.id, "⚠ Пожалуйста, используйте текстовые сообщения для выбора мероприятия.")
+            bot.register_next_step_handler(message, select_event_to_decline)
             return
-    else:
-        # Если время начала не указано, автоматически отменяем участие
-        cursor.execute('UPDATE applications SET status = "отменена" WHERE event_id = ? AND user_id = ?', (event_id, message.from_user.id))
-        conn.commit()
-        
-        bot.send_message(message.chat.id, "Ваше участие в мероприятии автоматически отменено из-за отсутствия информации о времени начала.")
-        
-        # Отправка уведомления администратору
-        cursor.execute('SELECT name FROM events WHERE id = ?', (event_id,))
-        event_name = cursor.fetchone()[0]
-        
-        for admin in ADMIN_IDS:
-            bot.send_message(
-                admin,
-                f"Пользователь {message.from_user.first_name} ({message.from_user.id}) отказался от участия в мероприятии '{event_name}'."
-            )
-        
-        return
+
+        # Обработка кнопки "Назад"
+        if message.text.strip() == "🔙 Назад":
+            show_main_menu(message)
+            return
+
+        # Определение выбранного мероприятия
+        selected_event_name = message.text.strip()
+
+        cursor.execute('''
+            SELECT event_id, name 
+            FROM applications 
+            JOIN events ON applications.event_id = events.id 
+            WHERE user_id = ?
+        ''', (message.from_user.id,))
+
+        events = cursor.fetchall()
+
+        event_id = None
+        for event in events:
+            if event[1] == selected_event_name:
+                event_id = event[0]
+                break
+        else:
+            bot.send_message(message.chat.id, "Выбранное мероприятие не найдено.")
+            return
+
+        # Проверка времени до начала мероприятия
+        cursor.execute('SELECT start_time FROM events WHERE id = ?', (event_id,))
+        start_time_result = cursor.fetchone()
+
+        if start_time_result and start_time_result[0]:
+            start_time_str = start_time_result[0]
+            start_time = datetime.strptime(start_time_str, '%Y-%m-%d %H:%M')
+            current_time = datetime.now()
+
+            if (start_time - current_time).total_seconds() / 3600 < 12:
+                bot.send_message(message.chat.id, "Отмена участия невозможна менее чем за 12 часов до начала мероприятия. Обратитесь к администратору.")
+                show_main_menu(message)
+                return
+        else:
+            # Если время начала не указано, автоматически отменяем участие
+            cursor.execute('UPDATE applications SET status = "отменена" WHERE event_id = ? AND user_id = ?', (event_id, message.from_user.id))
+            conn.commit()
+
+            bot.send_message(message.chat.id, "Ваше участие в мероприятии автоматически отменено из-за отсутствия информации о времени начала.")
+
+            # Отправка уведомления администратору
+            cursor.execute('SELECT name FROM events WHERE id = ?', (event_id,))
+            event_name = cursor.fetchone()[0]
+
+            for admin in ADMIN_IDS:
+                bot.send_message(
+                    admin,
+                    f"Пользователь {message.from_user.first_name} ({message.from_user.id}) отказался от участия в мероприятии '{event_name}'."
+                )
+            return
+
+    except Exception as e:
+        print(f"Ошибка в функции select_event_to_decline: {str(e)}")
+        bot.send_message(message.chat.id, "🚫 Произошла ошибка, попробуйте еще раз.")
+        show_main_menu(message)
 
     # После выбора мероприятия оставляем только кнопку "Назад"
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
@@ -3843,11 +4243,63 @@ def send_message_with_retry(message, text):
             time.sleep(1)  # Ждем секунду перед повторной попыткой
     else:
         print("Не удалось отправить сообщение после нескольких попыток.")
+@bot.message_handler(func=lambda message: message.text == "🔓 Разблокировать пользователя")
+def unban_user_step1(message):
+    if message.from_user.id in ADMIN_IDS:
+        cursor.execute('SELECT user_id FROM blocked_users')
+        blocked_users = cursor.fetchall()
         
+        if not blocked_users:
+            bot.send_message(message.chat.id, "В настоящее время нет заблокированных пользователей.")
+            return
+        
+        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+        
+        for user_id in blocked_users:
+            cursor.execute('SELECT full_name FROM saved_applications WHERE user_id=?', (user_id[0],))
+            user_info = cursor.fetchone()
+            
+            if user_info:  # Проверяем, найдена ли информация про юзера
+                name = user_info[0]
+                markup.add(f"{name} (ID: {user_id[0]})")
+            else:
+                markup.add(f"Пользователь (ID: {user_id[0]})")  # Если имя не найдено
+        
+        markup.add("❌ Отмена")
+        bot.send_message(message.chat.id, "Выберите пользователя для разблокировки:", reply_markup=markup)
+        bot.register_next_step_handler(message, unban_user_step2)
+
+
+def unban_user_step2(message):
+    if message.text == "❌ Отмена":
+        return show_admin_menu(message)
+    
+    user_id = int(message.text.split("(ID: ")[1].replace(")", ""))
+    cursor.execute('DELETE FROM blocked_users WHERE user_id = ?', (user_id,))
+    cursor.execute('UPDATE warnings SET warnings_count = 0 WHERE user_id = ?', (user_id,))
+    conn.commit()
+    
+    try:
+        bot.send_message(user_id, "✅ Вы были разблокированы администратором!")
+    except:
+        pass
+    
+    bot.send_message(message.chat.id, "Пользователь разблокирован!")
+    show_main_menu(message)
 # Обработка команды "Отправить отчет"
 @bot.message_handler(func=lambda message: message.text == "📝 Отправить отчет")
 def prompt_send_report(message):
     try:
+        # Проверка блокировки
+        user_id = message.from_user.id
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+          # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+            bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+            return
         cursor.execute('SELECT name FROM events')
         events = cursor.fetchall()
         if events:
@@ -4052,6 +4504,7 @@ def handle_report_content(message, event_id):
                     print(f"Ошибка при удалении файла: {e}")
         
         bot.send_message(message.chat.id, "Твой отчет успешно отправлен админу! 😊 Спасибо за твоё участие!")
+        show_main_menu(message)
 
     except sqlite3.Error as e:
         print(f"Ошибка при отправке отчета: {e}")
@@ -4071,33 +4524,44 @@ def cancel_action(message):
       show_main_menu(message) 
 
 
-
+      
 
 
 # Обработка текстовых сообщений и кнопок меню
 # Обработчик для всех текстовых сообщений
 @bot.message_handler(func=lambda message: True)
 def handle_menu(message):
-    try:
-        # Проверка на слишком быстрые команды и повторяющиеся сообщения.
+   user_id = message.from_user.id  # Получаем ID пользователя
+
+   try:
+        # Проверка блокировки
+        cursor = conn.cursor()  # Создаем курсор
+        cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
+        block_result = cursor.fetchone()
+        cursor.close()  # Закрываем курсор после использования
+
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
+          bot.send_message(message.chat.id, "❌ Вы заблокированы!")
+          return
+       
+        # Остальная логика обработки сообщений
         if message.from_user.id in last_message_time:
-            if time.time() - last_message_time[message.from_user.id] < 1:  
+            if time.time() - last_message_time[message.from_user.id] < 1:
                 handle_unusual_behavior(message.from_user.id)
                 return
-        if repeat_count.get(message.text) and repeat_count[message.text] >= 3:  
+        if repeat_count.get(message.text) and repeat_count[message.text] >= 3:
             handle_unusual_behavior(message.from_user.id)
             return
         if message.text not in repeat_count:
             repeat_count[message.text] = 0
-        repeat_count[message.text] += 1 
-        last_message_time[message.from_user.id] = time.time()
-
-        # Если сообщение не соответствует ни одной из известных команд, отправляем сообщение об ошибке
-        bot.send_message(message.chat.id, "Извините, я не понял твою команду. Пожалуйста, выбери действие из меню.")
+        repeat_count[message.text] += 1
+        last_message_time[message.from_user.id] = time.time()      
+        # Если сообщение не соответствует ни одной из известных команд
+        bot.send_message(message.chat.id, "Извините, я не понял вашу команду. Пожалуйста, выберите действие из меню.")
         show_main_menu(message)
-    except Exception as e:
-        print(f"Общая ошибка при обработке меню: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка.")
+   except Exception as e:
+          print(f"Общая ошибка при обработке меню: {e}")
+          bot.send_message(message.chat.id, "Произошла ошибка.")
 
 def handle_unusual_behavior(user_id):
     try:
@@ -4119,9 +4583,6 @@ if __name__ == "__main__":
             print(f"Произошла ошибка: {e}")
             print("Перезапуск бота...")
             os.execv(sys.executable, ['python'] + sys.argv)  # Перезапускаем текущий скрипт
-
-
-
 
 
 
