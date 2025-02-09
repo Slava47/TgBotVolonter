@@ -17,7 +17,6 @@ import pandas as pd
 from io import BytesIO
 import openpyxl
 
-
 TOKEN = os.getenv('TOKEN')  # Используйте имя переменной без префикса '$'
 bot = telebot.TeleBot(TOKEN)
 
@@ -232,6 +231,7 @@ user_captchas = {}
 user_requests = {}
 def update_blocked_users():
     while True:
+        updated = False  # Флаг для отслеживания изменений
         try:
             cursor.execute('SELECT user_id, block_time FROM blocked_users')
             blocked = cursor.fetchall()
@@ -244,14 +244,19 @@ def update_blocked_users():
                     if block_time <= now:
                         cursor.execute('DELETE FROM blocked_users WHERE user_id = ?', (user[0],))
                         conn.commit()
+                        updated = True
                 else:  # Если дата не указана, удаляем запись
                     cursor.execute('DELETE FROM blocked_users WHERE user_id = ?', (user[0],))
                     conn.commit()
-            print("Список заблокированных пользователей обновлён.")
+                    updated = True
+            
+            if updated:
+                print("Список заблокированных пользователей обновлён.")
         except Exception as e:
             print(f"Ошибка при обновлении списка заблокированных: {e}")
         
         time.sleep(60)  # Ждём 60 секунд
+
 
 
 # Запускаем функцию в отдельном потоке
@@ -508,7 +513,7 @@ def show_main_menu(message):
             types.KeyboardButton("📅 Мероприятия"),
             types.KeyboardButton("📋 Задания"),
             types.KeyboardButton("👤 Профиль"),
-            types.KeyboardButton("❓ Задать вопрос")  # Новая кнопка
+            types.KeyboardButton("❓ Задать вопрос")  
         ]
         
         # Добавляем кнопку администрирования, если пользователь — администратор
@@ -701,12 +706,14 @@ def show_admin_menu(message):
             types.KeyboardButton("🟢 Список участников"),
             types.KeyboardButton("🟢 Экспорт данных о мероприятии"),
             types.KeyboardButton("🟢 Отправить баллы"),
+            types.KeyboardButton("🟢 Вычесть баллы"),
+            types.KeyboardButton("🟢 Аннулировать баллы"),
+            types.KeyboardButton("🟢 Обнулить предупреждения"),  
             types.KeyboardButton("🟢 Рассмотреть отчеты"),
             types.KeyboardButton("⚠️ Вынести предупреждение"),
             types.KeyboardButton("⛔ Заблокировать пользователя"),
             types.KeyboardButton("🔓 Разблокировать пользователя"),
             types.KeyboardButton("📊 Полный отчет по боту"),
-            types.KeyboardButton("🟢 Отправить ссылку на получение часов"),  # Новая кнопка
             types.KeyboardButton("🔙 Назад")
         ]
         
@@ -921,47 +928,30 @@ def handle_question_input(message):
 @bot.message_handler(func=lambda message: message.text == "⚠️ Вынести предупреждение")
 def warn_user_step1(message):
     if message.from_user.id in ADMIN_IDS:
-        current_user_id = message.from_user.id 
-        
-        cursor.execute('''
-            SELECT sa.user_id, sa.full_name 
-            FROM saved_applications sa
-            LEFT JOIN blocked_users bu 
-                ON sa.user_id = bu.user_id 
-                AND bu.block_time > CURRENT_TIMESTAMP
-            WHERE bu.user_id IS NULL
-                AND sa.user_id != ?  
-        ''', (current_user_id,))  
-        users = cursor.fetchall()
-        
-        if users:
-            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
-            for user in users:
-                markup.add(f"{user[1]} (ID: {user[0]})")
-            markup.add("❌ Отмена")
-            bot.send_message(message.chat.id, "Выберите пользователя:", reply_markup=markup)
-            bot.register_next_step_handler(message, warn_user_step2)
-        else:
-            bot.send_message(message.chat.id, "Нет пользователей для вынесения предупреждения.")
-
+        bot.send_message(message.chat.id, "Введите Telegram ID пользователя, которому нужно вынести предупреждение:")
+        bot.register_next_step_handler(message, warn_user_step2)
+    else:
+        bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
+ 
 def warn_user_step2(message):
-    if message.text == "❌ Отмена":
-        return show_admin_menu(message)
-    
     try:
-        user_id = int(message.text.split("(ID: ")[1].replace(")", ""))
+        user_input = message.text.strip()
         
-        # Дополнительная проверка блокировки
-        cursor.execute('''
-            SELECT block_time 
-            FROM blocked_users 
-            WHERE user_id = ? 
-                AND block_time > CURRENT_TIMESTAMP
-        ''', (user_id,))
-        if cursor.fetchone():
-            bot.send_message(message.chat.id, "Этот пользователь уже заблокирован!")
+        # Проверяем, что ввод состоит только из цифр
+        if not user_input.isdigit():
+            bot.send_message(message.chat.id, "❌ Введите корректный Telegram ID (только цифры).")
             return
+            
+        user_id = int(user_input)
 
+        # Проверяем, существует ли пользователь в базе
+        cursor.execute("SELECT user_id FROM saved_applications WHERE user_id = ?", (user_id,))
+        user_exists = cursor.fetchone()
+ 
+        if not user_exists:
+            bot.send_message(message.chat.id, "❌ Пользователь с таким ID не найден.")
+            return
+ 
         # Добавление/обновление предупреждения
         cursor.execute('''
             INSERT INTO warnings (user_id, warnings_count, last_warning_time)
@@ -971,91 +961,82 @@ def warn_user_step2(message):
                 last_warning_time = ?
         ''', (user_id, datetime.now(), datetime.now()))
         conn.commit()
-
-        # Проверка на автоматическую блокировку
+ 
+        # Проверка количества предупреждений
         cursor.execute('SELECT warnings_count FROM warnings WHERE user_id = ?', (user_id,))
         count = cursor.fetchone()[0]
-        
+ 
         if count >= 3:
-            cursor.execute('''
-                INSERT OR REPLACE INTO blocked_users 
-                (user_id, block_time)
-                VALUES (?, ?)
-            ''', (user_id, datetime.now() + timedelta(days=365)))
+            cursor.execute('INSERT OR REPLACE INTO blocked_users (user_id, block_time) VALUES (?, ?)',
+                          (user_id, datetime.now() + timedelta(days=365)))
             conn.commit()
-
-        # Отправка уведомлений
-        try:
-            if count >= 3:
-                bot.send_message(user_id, "🚫 Вы были заблокированы за 3 предупреждения!")
-            else:
-                bot.send_message(user_id, f"⚠️ Предупреждение {count}/3! При 3-х вы будете заблокированы!")
-        except Exception as e:
-            print(f"Ошибка отправки уведомления: {e}")
-
-        bot.send_message(message.chat.id, f"✅ Пользователь получил {count}/3 предупреждений!")
-
+            bot.send_message(user_id, "🚫 Вы были автоматически заблокированы за 3 предупреждения!")
+ 
+        else:
+            bot.send_message(user_id, f"⚠️ У вас {count}/3 предупреждений! При 3-х вы будете заблокированы!")
+ 
+        bot.send_message(message.chat.id, f"✅ Пользователю {user_id} вынесено {count}/3 предупреждений.")
+        show_main_menu(message)
+    
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Введите корректный Telegram ID.")
     except Exception as e:
         print(f"Ошибка при вынесении предупреждения: {e}")
-        bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса")
+        bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса.")
+
 
 @bot.message_handler(func=lambda message: message.text == "⛔ Заблокировать пользователя")
 def ban_user_step1(message):
     if message.from_user.id in ADMIN_IDS:
-        current_user_id = message.from_user.id  
-        
-        cursor.execute('''
-            SELECT sa.user_id, sa.full_name 
-            FROM saved_applications sa
-            LEFT JOIN blocked_users bu ON sa.user_id = bu.user_id
-            WHERE (bu.user_id IS NULL OR bu.block_time < ?)
-                AND sa.user_id != ?  
-        ''', (datetime.now(), current_user_id))  
-        
-        users = cursor.fetchall()
-        
-        if users:
-            markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
-            for user in users:
-                markup.add(f"{user[1]} (ID: {user[0]})")
-            markup.add("❌ Отмена")
-            bot.send_message(message.chat.id, "Выберите пользователя для блокировки:", reply_markup=markup)
-            bot.register_next_step_handler(message, ban_user_step2)
-        else:
-            bot.send_message(message.chat.id, "Нет пользователей для блокировки.")
+        bot.send_message(message.chat.id, "Введите Telegram ID пользователя, которого нужно заблокировать:")
+        bot.register_next_step_handler(message, ban_user_step2)
     else:
         bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
-
+        show_main_menu(message)
+ 
 def ban_user_step2(message):
-    if message.text == "❌ Отмена":
-        return show_admin_menu(message)
-    
     try:
-        user_id = int(message.text.split("(ID: ")[1].replace(")", ""))
+        user_input = message.text.strip()
         
+        # Проверяем, что ввод состоит только из цифр
+        if not user_input.isdigit():
+            bot.send_message(message.chat.id, "❌ Введите корректный Telegram ID (только цифры).")
+            return
+            
+        user_id = int(user_input)
+
+        # Проверяем, существует ли пользователь в базе
+        cursor.execute("SELECT user_id FROM saved_applications WHERE user_id = ?", (user_id,))
+        user_exists = cursor.fetchone()
+ 
+        if not user_exists:
+            bot.send_message(message.chat.id, "❌ Пользователь с таким ID не найден.")
+            return
+ 
         # Проверяем, не заблокирован ли пользователь уже
         cursor.execute('SELECT block_time FROM blocked_users WHERE user_id = ?', (user_id,))
         block_result = cursor.fetchone()
-        
-        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S') > datetime.now():
+ 
+        if block_result and datetime.strptime(block_result[0], '%Y-%m-%d %H:%M:%S.%f') > datetime.now():
             bot.send_message(message.chat.id, "Этот пользователь уже заблокирован.")
-            return show_admin_menu(message)
-        
+            show_main_menu(message)
+            return
+ 
         # Блокируем пользователя
         cursor.execute('INSERT OR REPLACE INTO blocked_users (user_id, block_time) VALUES (?, ?)',
                       (user_id, datetime.now() + timedelta(days=365)))
         conn.commit()
-        
-        try:
-            bot.send_message(user_id, "🚫 Вы были заблокированы администратором!")
-        except:
-            pass
-        
-        bot.send_message(message.chat.id, "Пользователь заблокирован!")
+ 
+        bot.send_message(user_id, "🚫 Вы были заблокированы администратором!")
+        bot.send_message(message.chat.id, f"✅ Пользователь {user_id} был заблокирован.")
         show_main_menu(message)
+    
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Введите корректный Telegram ID.")
     except Exception as e:
         print(f"Ошибка при блокировке пользователя: {e}")
-        bot.send_message(message.chat.id, "Произошла ошибка при блокировке пользователя.")
+        bot.send_message(message.chat.id, "❌ Произошла ошибка при блокировке пользователя.")
+        
 @bot.message_handler(func=lambda message: message.text == "📊 Полный отчет по боту")
 def generate_full_report(message):
     try:
@@ -1711,7 +1692,8 @@ def save_task_application(message, task_id, full_name, group_name):
                 f"Задание: {task_name}"
             )
 
-        bot.send_message(message.chat.id, f"Вы успешно записаны на задание '{task_name}'!")
+        bot.send_message(message.chat.id, f"Ты успешно записан на задание '{task_name}'!")
+        show_main_menu(message)
     
     except sqlite3.Error as e:
         print(f"Ошибка при сохранении заявки на задание: {e}")
@@ -4286,6 +4268,158 @@ def unban_user_step2(message):
     
     bot.send_message(message.chat.id, "Пользователь разблокирован!")
     show_main_menu(message)
+@bot.message_handler(func=lambda message: message.text == "🟢 Вычесть баллы")
+def deduct_points_step1(message):
+    if message.from_user.id in ADMIN_IDS:
+        bot.send_message(message.chat.id, "Введите Telegram ID пользователя, у которого нужно вычесть баллы:")
+        bot.register_next_step_handler(message, deduct_points_step2)
+    else:
+        bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
+
+def deduct_points_step2(message):
+    try:
+        user_input = message.text.strip()
+        if not user_input.isdigit():
+            bot.send_message(message.chat.id, "❌ Введите корректный Telegram ID (только цифры).")
+            return
+            
+        user_id = int(user_input)
+        
+        cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+ 
+        if result:
+            bot.send_message(message.chat.id, f"У пользователя {user_id} сейчас {result[0]} баллов.\nСколько баллов вычесть?")
+            bot.register_next_step_handler(message, lambda msg: deduct_points_step3(msg, user_id))
+        else:
+            bot.send_message(message.chat.id, "❌ Пользователь не найден в базе данных.")
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Введите корректный Telegram ID.")
+    except Exception as e:
+        print(f"Ошибка при поиске пользователя: {e}")
+        bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса.")
+
+def deduct_points_step3(message, user_id):
+    try:
+        points_input = message.text.strip()
+        if not points_input.isdigit():
+            bot.send_message(message.chat.id, "❌ Введите корректное число баллов (только цифры).")
+            return
+            
+        points_to_deduct = int(points_input)
+ 
+        if points_to_deduct < 0:
+            bot.send_message(message.chat.id, "❌ Число баллов должно быть положительным.")
+            return
+ 
+        cursor.execute("SELECT points FROM user_points WHERE user_id = ?", (user_id,))
+        result = cursor.fetchone()
+ 
+        if result:
+            new_points = max(0, result[0] - points_to_deduct)
+            cursor.execute("UPDATE user_points SET points = ? WHERE user_id = ?", (new_points, user_id))
+            conn.commit()
+            bot.send_message(message.chat.id, f"✅ У пользователя {user_id} теперь {new_points} баллов.")
+            show_main_menu(message)
+            bot.send_message(user_id, f"❌ У вас вычли {points_to_deduct} баллов. Теперь у вас {new_points} баллов.")
+        else:
+            bot.send_message(message.chat.id, "❌ Пользователь не найден в базе данных.")
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Введите корректное число баллов.")
+    except Exception as e:
+        print(f"Ошибка при вычитании баллов: {e}")
+        bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса.")
+
+@bot.message_handler(func=lambda message: message.text == "🟢 Аннулировать баллы")
+def confirm_reset_points(message):
+    if message.from_user.id in ADMIN_IDS:
+        markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
+        markup.add("✅ Да, аннулировать", "❌ Нет, отмена")
+        bot.send_message(message.chat.id, "⚠ Вы уверены, что хотите аннулировать все баллы у пользователей?", reply_markup=markup)
+        bot.register_next_step_handler(message, reset_all_points)
+    else:
+        bot.send_message(message.chat.id, "Эта функция доступна только администраторам.")
+
+def reset_all_points(message):
+    if message.text not in ["✅ Да, аннулировать", "❌ Нет, отмена"]:
+        bot.send_message(message.chat.id, "❌ Некорректный ввод. Операция отменена.")
+        show_main_menu(message)
+        return
+
+    try:
+        if message.text == "✅ Да, аннулировать":
+            cursor.execute("UPDATE user_points SET points = 0")
+            conn.commit()
+            bot.send_message(message.chat.id, "✅ Все баллы аннулированы.")
+        else:
+            bot.send_message(message.chat.id, "❌ Операция отменена.")
+
+        show_main_menu(message)
+    
+    except Exception as e:
+        print(f"Ошибка при аннулировании баллов: {e}")
+        bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса.")
+@bot.message_handler(func=lambda message: message.text == "🟢 Обнулить предупреждения")
+def reset_warnings_step1(message):
+    if message.from_user.id in ADMIN_IDS:
+        bot.send_message(message.chat.id, "Введите Telegram ID пользователя, предупреждения которого нужно обнулить:")
+        bot.register_next_step_handler(message, reset_warnings_step2)
+    else:
+        bot.send_message(message.chat.id, "❌ Эта функция доступна только администраторам.")
+        return
+
+def reset_warnings_step2(message):
+    try:
+        user_input = message.text.strip()
+        if not user_input.isdigit():
+            bot.send_message(message.chat.id, "❌ Введите корректный Telegram ID (только цифры).")
+            return
+            
+        user_id = int(user_input)
+
+        # Проверяем, существует ли пользователь в базе предупреждений
+        cursor.execute("SELECT warnings_count FROM warnings WHERE user_id = ?", (user_id,))
+        warning_data = cursor.fetchone()
+
+        # Проверяем, заблокирован ли пользователь
+        cursor.execute("SELECT block_time FROM blocked_users WHERE user_id = ?", (user_id,))
+        block_data = cursor.fetchone()
+
+        # Если у пользователя нет предупреждений
+        if not warning_data:
+            bot.send_message(message.chat.id, "❌ У этого пользователя нет предупреждений.")
+            show_main_menu(message)
+            return
+
+        warnings_count = warning_data[0]
+
+        # Если у пользователя 3 предупреждения или он заблокирован, нельзя обнулить
+        if warnings_count >= 3:
+            bot.send_message(message.chat.id, "❌ Нельзя обнулить предупреждения у пользователя с 3 предупреждениями.")
+            show_main_menu(message)
+            return
+
+        if block_data:
+            bot.send_message(message.chat.id, "❌ Нельзя обнулить предупреждения у заблокированного пользователя.")
+            show_main_menu(message)
+            return
+
+        # Обнуляем количество предупреждений
+        cursor.execute("UPDATE warnings SET warnings_count = 0 WHERE user_id = ?", (user_id,))
+        conn.commit()
+
+        bot.send_message(message.chat.id, f"✅ Предупреждения пользователя {user_id} были обнулены.")
+        bot.send_message(user_id, "✅ Ваши предупреждения были обнулены администратором.")
+        show_main_menu(message)
+    
+    except ValueError:
+        bot.send_message(message.chat.id, "❌ Введите корректный Telegram ID.")
+        show_main_menu(message)
+    except Exception as e:
+        print(f"Ошибка при обнулении предупреждений: {e}")
+        bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса.")
+        show_main_menu(message)
+
 # Обработка команды "Отправить отчет"
 @bot.message_handler(func=lambda message: message.text == "📝 Отправить отчет")
 def prompt_send_report(message):
@@ -4583,6 +4717,7 @@ if __name__ == "__main__":
             print(f"Произошла ошибка: {e}")
             print("Перезапуск бота...")
             os.execv(sys.executable, ['python'] + sys.argv)  # Перезапускаем текущий скрипт
+
 
 
 
