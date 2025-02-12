@@ -304,7 +304,7 @@ def check_captcha(message, correct_text):
         user_id = message.from_user.id
         
         if message.text.strip().upper() == correct_text:
-            bot.send_message(message.chat.id, "✅ *Проверка пройдена!* 🎉 Ты молодец! Теперь давай начнем! 😊")
+            bot.send_message(message.chat.id, "✅ *Проверка пройдена!* Ты молодец! 🎉")
             
             # Проверяем, получил ли пользователь приветственное сообщение
             cursor.execute('SELECT has_received_welcome_message FROM user_states WHERE user_id = ?', (user_id,))
@@ -321,13 +321,28 @@ def check_captcha(message, correct_text):
             if result[0] == 0:
                 # Отправляем приветственное сообщение
                 welcome_message = (
-                    "👋 Привет! А теперь давай познакомимся! \n"
-                    "Я - твой «карманный помощник» для волонтера ВГЛТУ. 🤖\n"
-                    "С помощью меня ты можешь узнать о актуальных мероприятиях и записаться на участие в них. "
-                    "Также ты сможешь поучаствовать в розыгрыше призов и посоревноваться с другими ребятами в выполнении заданий! 🏆\n"
-                    "Давай начнем! 😉"
-                )
-                bot.send_message(message.chat.id, welcome_message)
+    "👋 <b>А теперь давай познакомимся!</b>\n\n"
+    "Я <b>ДоброБот</b>, твой «карманный помощник» для волонтера ВГЛТУ. 🤖\n\n"
+    "✅ <b>С помощью меня ты можешь:</b>\n"
+    "• Узнать об актуальных мероприятиях и записаться на участие в них;\n"
+    "• Копить баллы для розыгрыша;\n"
+    "• Соревноваться с другими ребятами в выполнении заданий.\n\n"
+    "❓ <b>А для чего же нужны баллы?</b>\n"
+    "Об этом мы узнаем позже!\n"
+    "<i>Говорят, Аппарат Управления волонтерского центра готовит что-то крутое.</i> (Может это мерч? 🤫)\n"
+    "<b>Следи за новостями</b>, чтобы первым узнать о главных призах!\n\n"
+    "‼️ <b>Перед тем как мы приступим, ознакомься с правилами:</b>\n\n"
+    "1️⃣ <b>Указывай свои актуальные данные</b>, так как на их основе будут формироваться освобождения на мероприятия.\n"
+    "2️⃣ <b>После выполнения задания/посещения мероприятия отправь отчет</b> "
+    "(<i>фото себя на мероприятии/фото самого мероприятия/скриншот</i>). "
+    "<u>В противном случае баллы не начисляться!</u>\n"
+    "3️⃣ <b>Отказаться от участия</b> в мероприятии можно не позднее, чем за 15 часов до начала мероприятия.\n"
+    "4️⃣ За неподобающее поведение (<i>спам, фото, не связанные с мероприятием, вопросы, не связанные с волонтерством</i>) "
+    "выдается <b>3 предупреждения</b>, а затем аккаунт блокируется!\n\n"
+    "💡 <b>А теперь давай начнем!</b> 😉"
+)
+
+                bot.send_message(message.chat.id, welcome_message, parse_mode="HTML")
                 
                 # Обновляем флаг в базе данных
                 cursor.execute('UPDATE user_states SET has_received_welcome_message = 1 WHERE user_id = ?', (user_id,))
@@ -717,6 +732,7 @@ def show_profile_menu(message):
             types.KeyboardButton("🏆 Рейтинг"),
             types.KeyboardButton("🔗 Запросить ссылку на волонтерские часы"),
             types.KeyboardButton("🔔 Подписаться на уведомления" if not is_subscribed else "🔕 Отписаться от уведомлений"),
+            types.KeyboardButton("📜 Правила"),
             types.KeyboardButton("🔙 Назад")
         ]
         
@@ -736,24 +752,24 @@ def show_admin_menu(message):
         markup = types.ReplyKeyboardMarkup(resize_keyboard=True)
         
         buttons = [
-            types.KeyboardButton("🟢 Добавить задание"),
-            types.KeyboardButton("🟢 Удалить задание"),
-            types.KeyboardButton("🟢 Редактировать мероприятие"),
-            types.KeyboardButton("🟢 Добавить мероприятие"),
-            types.KeyboardButton("🟢 Удалить мероприятие"),
-            types.KeyboardButton("🟢 Изменить задание"),
-            types.KeyboardButton("🟢 Список участников"),
-            types.KeyboardButton("🟢 Экспорт данных о мероприятии"),
-            types.KeyboardButton("🟢 Отправить баллы"),
-            types.KeyboardButton("🟢 Вычесть баллы"),
-            types.KeyboardButton("🟢 Аннулировать баллы"),
-            types.KeyboardButton("🟢 Обнулить предупреждения"),  
-            types.KeyboardButton("🟢 Рассмотреть отчеты"),
+            types.KeyboardButton("📝 Добавить задание"),
+            types.KeyboardButton("🔄 Редактировать задание"),
+            types.KeyboardButton("🗑️ Удалить задание"),
+            types.KeyboardButton("📋 Рассмотреть отчеты"),
+            types.KeyboardButton("➕ Добавить мероприятие"),
+            types.KeyboardButton("✏️ Редактировать мероприятие"),
+            types.KeyboardButton("❌ Удалить мероприятие"),
+            types.KeyboardButton("👥 Список участников"),
+            types.KeyboardButton("📤 Экспорт данных о мероприятии"),
+            types.KeyboardButton("🎁 Отправить баллы"),
+            types.KeyboardButton("➖ Вычесть баллы"),
+            types.KeyboardButton("🚫 Аннулировать баллы"),  
             types.KeyboardButton("⚠️ Вынести предупреждение"),
-            types.KeyboardButton("⛔ Заблокировать пользователя"),
-            types.KeyboardButton("🔓 Разблокировать пользователя"),
+            types.KeyboardButton("⛔ Заблокировать"),
+            types.KeyboardButton("🔓 Разблокировать"),
+            types.KeyboardButton("✨ Обнулить предупреждения"),
             types.KeyboardButton("📊 Полный отчет по боту"),
-            types.KeyboardButton("🟢 Отправить ссылку на получение часов"),
+            types.KeyboardButton("🔗 Отправить ссылку на часы"),
             types.KeyboardButton("📂 Экспорт списка пользователей"),
             types.KeyboardButton("🔙 Назад")
         ]
@@ -764,7 +780,7 @@ def show_admin_menu(message):
         bot.send_message(message.chat.id, "Выбери действие:", reply_markup=markup)
     except Exception as e:
         print(f"Ошибка при отображении меню администрирования: {e}")
-@bot.message_handler(func=lambda message: message.text == "🟢 Изменить задание")
+@bot.message_handler(func=lambda message: message.text == "🔄 Редактировать задание")
 def prompt_edit_task(message):
     """
     Функция для выбора задания, которое нужно изменить.
@@ -966,7 +982,23 @@ def handle_question_input(message):
 # Обработка кнопки "Изменить задание"
 
 # Функция для отображения главного меню
-
+@bot.message_handler(func=lambda message: message.text == "📜 Правила")
+def send_rules(message):
+    try:
+        rules_text = (
+            "1️⃣ <b>Указывай свои актуальные данные</b>, так как на их основе будут формироваться освобождения на мероприятия.\n"
+            "2️⃣ <b>После выполнения задания/посещения мероприятия отправь отчет</b> "
+            "(<i>фото себя на мероприятии/фото самого мероприятия/скриншот</i>). "
+            "<u>В противном случае баллы не начисляться!</u>\n"
+            "3️⃣ <b>Отказаться от участия</b> в мероприятии можно не позднее, чем за 15 часов до начала мероприятия.\n"
+            "4️⃣ За неподобающее поведение (<i>спам, фото, не связанные с мероприятием, вопросы, не связанные с волонтерством</i>) "
+            "выдается <b>3 предупреждения</b>, а затем аккаунт блокируется!"
+        )
+        bot.send_message(message.chat.id, rules_text, parse_mode="HTML")
+        show_main_menu(message)
+    except Exception as e:
+        print(f"Ошибка при отправке правил: {e}")
+        bot.send_message(message.chat.id, "Произошла ошибка при отправке правил.")
 @bot.message_handler(func=lambda message: message.text == "⚠️ Вынести предупреждение")
 def warn_user_step1(message):
     if message.from_user.id in ADMIN_IDS:
@@ -1027,7 +1059,7 @@ def warn_user_step2(message):
         bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса.")
 
 
-@bot.message_handler(func=lambda message: message.text == "⛔ Заблокировать пользователя")
+@bot.message_handler(func=lambda message: message.text == "⛔ Заблокировать")
 def ban_user_step1(message):
     if message.from_user.id in ADMIN_IDS:
         bot.send_message(message.chat.id, "Введите Telegram ID пользователя, которого нужно заблокировать:")
@@ -1376,7 +1408,7 @@ def save_task_report(message, task_id):
     except Exception as e:
         print(f"Общая ошибка при сохранении отчета: {e}")
         bot.send_message(message.chat.id, "😱 Ой! Произошла непредвиденная ошибка. Мы уже работаем над этим!")
-@bot.message_handler(func=lambda message: message.text == "🟢 Рассмотреть отчеты")
+@bot.message_handler(func=lambda message: message.text == "📋 Рассмотреть отчеты")
 def review_reports(message):
     try:
         if message.from_user.id in ADMIN_IDS:
@@ -1780,7 +1812,7 @@ def save_task_application(message, task_id, full_name, group_name):
 # Глобальный словарь для хранения данных задания
 task_data = {}
 
-@bot.message_handler(func=lambda message: message.text == "🟢 Добавить задание")
+@bot.message_handler(func=lambda message: message.text == "📝 Добавить задание")
 def start_add_task(message):
     """
     Начало процесса добавления нового задания в виде меню.
@@ -1993,7 +2025,7 @@ def remove_expired_tasks():
         time.sleep(60)  # Проверяем каждую минуту
     conn.close()
 threading.Thread(target=remove_expired_tasks, daemon=True).start()  
-@bot.message_handler(func=lambda message: message.text == "🟢 Удалить задание")
+@bot.message_handler(func=lambda message: message.text == "🗑️ Удалить задание")
 def prompt_delete_task(message):
     """
     Функция для отображения списка заданий и запроса выбора задания для удаления.
@@ -2026,8 +2058,7 @@ def notify_task_subscribers(task_name):
         message_text = (
             f"🌟 <b>У нас отличные новости!</b> 🎉\n\n"
             f"📋 <b>Новое задание: {task_name}</b> 🎯\n\n"
-            f"🔔 Не упустите шанс заработать баллы и внести свой вклад!\n"
-            f"👉 Запишитесь прямо сейчас в разделе '📋 Задания'!"
+            f"👉 Запишитесь прямо сейчас в разделе «📋 Задания»!"
         )
 
         for subscriber in subscribers:
@@ -2330,7 +2361,7 @@ def handle_event_selection(message):
         bot.send_message(message.chat.id, "Произошла ошибка.")
 
 
-@bot.message_handler(func=lambda message: message.text == "🟢 Список участников")
+@bot.message_handler(func=lambda message: message.text == "👥 Список участников")
 def show_participants_menu(message):
     try:
         if message.from_user.id in ADMIN_IDS:
@@ -2954,6 +2985,7 @@ def submit_application(message, full_name, group_name, faculty, event_id, needs_
           pass  
         elif current_count >= max_participants:
             bot.send_message(user_id, "Извини, максимальное количество участников на это мероприятие уже достигнуто.")
+            show_main_menu(message)
             return
 
         # Вставляем заявку в базу данных
@@ -3019,7 +3051,7 @@ def submit_application(message, full_name, group_name, faculty, event_id, needs_
 
 import pandas as pd
 
-@bot.message_handler(func=lambda message: message.text == "🟢 Экспорт данных о мероприятии")
+@bot.message_handler(func=lambda message: message.text == "📤 Экспорт данных о мероприятии")
 def export_event_data(message):
     try:
         if message.from_user.id in ADMIN_IDS:
@@ -3208,7 +3240,7 @@ def handle_request_link(message):
 
 
 # Обработка команды "Отправить ссылку"
-@bot.message_handler(func=lambda message: message.text == "🟢 Отправить ссылку на получение часов")
+@bot.message_handler(func=lambda message: message.text == "🔗 Отправить ссылку на часы")
 def prompt_send_link(message):
     try:
         if message.from_user.id in ADMIN_IDS:
@@ -3533,8 +3565,8 @@ def select_event_to_decline(message):
             start_time = datetime.strptime(start_time_str, '%Y-%m-%d %H:%M')
             current_time = datetime.now()
 
-            if (start_time - current_time).total_seconds() / 3600 < 12:
-                bot.send_message(message.chat.id, "Отмена участия невозможна менее чем за 12 часов до начала мероприятия. Обратитесь к администратору.")
+            if (start_time - current_time).total_seconds() / 3600 < 15:
+                bot.send_message(message.chat.id, "Отмена участия невозможна менее чем за 15 часов до начала мероприятия. Обратитесь к администратору.")
                 show_main_menu(message)
                 return
         else:
@@ -3611,7 +3643,7 @@ def decline_participation_reason(message, event_id):
 # Глобальная переменная для хранения данных о мероприятии
 event_data = {}
 
-@bot.message_handler(func=lambda message: message.text == "🟢 Добавить мероприятие")
+@bot.message_handler(func=lambda message: message.text == "➕ Добавить мероприятие")
 def start_add_event(message):
     """
     Запуск процесса добавления нового мероприятия.
@@ -3782,7 +3814,7 @@ def save_new_event_to_db(message):
 
 
 
-@bot.message_handler(func=lambda message: message.text == "🟢 Редактировать мероприятие")
+@bot.message_handler(func=lambda message: message.text == "✏️ Редактировать мероприятие")
 def prompt_edit_event(message):
     try:
         if message.from_user.id in ADMIN_IDS:
@@ -4034,8 +4066,7 @@ def notify_subscribers(event_name, event_type="мероприятие"):
         message_text = (
             f"🎉 <b>Новое {event_type}!</b>\n\n"
             f"📌 <b>{event_name}</b>\n\n"
-            f"✨ Это событие обещает быть интересным и захватывающим!\n"
-            f"Не пропустите возможность принять участие. 😊"
+            f"✨ Это событие обещает быть интересным и захватывающим!\n"           
         )
 
         for subscriber in subscribers:
@@ -4097,7 +4128,7 @@ def cancel_action(message):
 
 
 # Обработка команды "Удалить мероприятие"
-@bot.message_handler(func=lambda message: message.text == "🟢 Удалить мероприятие")
+@bot.message_handler(func=lambda message: message.text == "❌ Удалить мероприятие")
 def delete_event(message):
     if message.from_user.id in ADMIN_IDS:
         cursor.execute('SELECT name FROM events')
@@ -4134,10 +4165,11 @@ def confirm_delete_event(message):
             bot.send_message(user, f"Мероприятие '{selected_event}' было удалено.")
 
     bot.send_message(
-        message.chat.id, f"Мероприятие '{selected_event}' успешно удалено."
+        message.chat.id, f"Мероприятие '{selected_event}' успешно удалено."     
     )
+    show_main_menu(message)
 
-@bot.message_handler(func=lambda message: message.text == "🟢 Отправить баллы")
+@bot.message_handler(func=lambda message: message.text == "🎁 Отправить баллы")
 def send_points_menu(message):
     try:
         if message.from_user.id in ADMIN_IDS:
@@ -4303,7 +4335,7 @@ def send_message_with_retry(message, text):
 valid_unban_options = []
 
 # Обработчик команды "🔓 Разблокировать пользователя"
-@bot.message_handler(func=lambda message: message.text == "🔓 Разблокировать пользователя")
+@bot.message_handler(func=lambda message: message.text == "🔓 Разблокировать")
 def unban_user_step1(message):
     # Проверка на права администратора
     if message.from_user.id in ADMIN_IDS:
@@ -4387,7 +4419,7 @@ def unban_user_step2(message):
     # Отображаем основное меню
     show_main_menu(message)
 
-@bot.message_handler(func=lambda message: message.text == "🟢 Вычесть баллы")
+@bot.message_handler(func=lambda message: message.text == "➖ Вычесть баллы")
 def deduct_points_step1(message):
     if message.from_user.id in ADMIN_IDS:
         bot.send_message(message.chat.id, "Введите Telegram ID пользователя, у которого нужно вычесть баллы:")
@@ -4449,7 +4481,7 @@ def deduct_points_step3(message, user_id):
         print(f"Ошибка при вычитании баллов: {e}")
         bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса.")
 
-@bot.message_handler(func=lambda message: message.text == "🟢 Аннулировать баллы")
+@bot.message_handler(func=lambda message: message.text == "🚫 Аннулировать баллы")
 def confirm_reset_points(message):
     if message.from_user.id in ADMIN_IDS:
         markup = types.ReplyKeyboardMarkup(one_time_keyboard=True)
@@ -4478,7 +4510,7 @@ def reset_all_points(message):
     except Exception as e:
         print(f"Ошибка при аннулировании баллов: {e}")
         bot.send_message(message.chat.id, "❌ Произошла ошибка при обработке запроса.")
-@bot.message_handler(func=lambda message: message.text == "🟢 Обнулить предупреждения")
+@bot.message_handler(func=lambda message: message.text == "✨ Обнулить предупреждения")
 def reset_warnings_step1(message):
     if message.from_user.id in ADMIN_IDS:
         bot.send_message(message.chat.id, "Введите Telegram ID пользователя, предупреждения которого нужно обнулить:")
